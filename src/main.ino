@@ -12,38 +12,6 @@ extern "C" {
   #include "user_interface.h"
 }
 
-const char HTTP_HEAD[] PROGMEM                      = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/><title>{v}</title>";
-const char HTTP_STYLE[] PROGMEM                     = "<style>.c{text-align: center;} div,input{padding:5px;font-size:1em;} input{width:95%;margin-top:3px;margin-bottom:3px;} body{text-align: center;font-family:verdana;} button{border:0;border-radius:0.3rem;background-color:#1fa3ec;color:#fff;line-height:2.4rem;font-size:1.2rem;width:100%;margin-top:3px;} .q{float: right;width: 64px;text-align: right;} .l{background: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAALVBMVEX///8EBwfBwsLw8PAzNjaCg4NTVVUjJiZDRUUUFxdiZGSho6OSk5Pg4eFydHTCjaf3AAAAZElEQVQ4je2NSw7AIAhEBamKn97/uMXEGBvozkWb9C2Zx4xzWykBhFAeYp9gkLyZE0zIMno9n4g19hmdY39scwqVkOXaxph0ZCXQcqxSpgQpONa59wkRDOL93eAXvimwlbPbwwVAegLS1HGfZAAAAABJRU5ErkJggg==\") no-repeat left center;background-size: 1em;}</style>";
-const char HTTP_SCRIPT[] PROGMEM                    = "<script>function c(l){document.getElementById('s').value=l.innerText||l.textContent;document.getElementById('p').focus();}</script>";
-const char HTTP_HEAD_END[] PROGMEM                  = "</head><body><div style='text-align:left;display:inline-block;min-width:260px;'>";
-const char HTTP_ITEM[] PROGMEM                      = "<div><a href='#p' onclick='c(this)'>{v}</a>&nbsp;<span class='q {i}'>{r}%</span></div>";
-const char HTTP_FORM_START[] PROGMEM                = "<form method='get' action='wifisave'><input id='s' name='s' length=32 placeholder='SSID' required><br/><input id='p' name='p' length=64 type='password' placeholder='password' required><hr/>";
-const char HTTP_FORM_INPUT[] PROGMEM                = "<input id='{i}' name='{n}' placeholder='{p}' maxlength={l} value='{v}' {c}><br/>";
-const char HTTP_FORM_INPUT_LIST[] PROGMEM           = "<input id='{i}' name='{n}' placeholder='{p}' list='d' {c}><datalist id='d'{o}></datalist><br/>";
-const char HTTP_FORM_INPUT_LIST_OPTION[] PROGMEM    = "<option>{o}</option>";
-const char HTTP_FORM_END[] PROGMEM                  = "<hr/><button type='submit'>Save</button></form>";
-const char HTTP_SCAN_LINK[] PROGMEM                 = "<br/><div class=\"c\"><a href=\"/scan\">Scan for networks</a></div>";
-const char HTTP_SAVED[] PROGMEM                     = "<div>Credentials Saved<br/>Trying to connect ESP to network.<br/>If it fails reconnect to AP to try again</div>";
-const char HTTP_END[] PROGMEM                       = "</div></body></html>";
-
-// DNS server
-const uint8_t DNS_PORT = 53;
-
-const char*   CONFIG_FILE   = "/config.json";
-
-/* Possible switch states */
-const char    STATE_OFF      = '0';
-const char    STATE_ON       = '1';
-
-/* Module settings */
-#ifdef ESP01
-const String  MODULE_TYPE  = "light";
-const String  CHANNEL_TYPE = MODULE_TYPE;
-#else
-const String  MODULE_TYPE  = "lightStation";
-const String  CHANNEL_TYPE = "light";
-#endif
-
 enum InputType {Combo, Text};
 
 struct ConfigParam {
@@ -77,6 +45,20 @@ struct ConfigParam {
     s.toCharArray(value, length);
   }
 };
+
+// DNS server
+const uint8_t DNS_PORT = 53;
+
+const char*   CONFIG_FILE    = "/config.json";
+const char*   SETTINGS_FILE  = "/settings.json";
+
+/* Possible switch states */
+const char    STATE_OFF      = '0';
+const char    STATE_ON       = '1';
+
+/* Module settings */
+const String  MODULE_TYPE  = "lightStation";
+const String  CHANNEL_TYPE = "light";
 
 struct Channel {
   uint8_t       switchPin;
@@ -121,27 +103,17 @@ ESP8266WebServer        _httpServer(80);
 ESP8266HTTPUpdateServer _httpUpdater;
 long                    _nextBrokerConnAtte = 0;
 
-ConfigParam _moduleNameCfg     = {Text, "moduleName", "Module name", "", PARAM_LENGTH, "required"};
-ConfigParam _moduleLocationCfg = {Text, "moduleLocation", "Module location", "", PARAM_LENGTH, "required"};
-ConfigParam _mqttPortCfg       = {Text, "mqttPort", "MQTT port", "", PARAM_LENGTH, ""};
-ConfigParam _mqttHostCfg       = {Text, "mqttHost", "MQTT host", "", PARAM_LENGTH, ""};
+ConfigParam _moduleNameCfg      = {Text, "moduleName", "Module name", "", PARAM_LENGTH, "required"};
+ConfigParam _moduleLocationCfg  = {Text, "moduleLocation", "Module location", "", PARAM_LENGTH, "required"};
+ConfigParam _mqttPortCfg        = {Text, "mqttPort", "MQTT port", "", PARAM_LENGTH, ""};
+ConfigParam _mqttHostCfg        = {Text, "mqttHost", "MQTT host", "", PARAM_LENGTH, ""};
 
-#ifndef ESP01
-ConfigParam _cfgChA = {Text, "channelA", "Channel A", "", PARAM_LENGTH, ""};
-ConfigParam _cfgChB = {Text, "channelB", "Channel B", "", PARAM_LENGTH, ""};
-ConfigParam _cfgChC = {Text, "channelC", "Channel C", "", PARAM_LENGTH, ""};
-#endif
+ConfigParam _cfgChA             = {Text, "channelA", "Channel A", "", PARAM_LENGTH, ""};
+ConfigParam _cfgChB             = {Text, "channelB", "Channel B", "", PARAM_LENGTH, ""};
+ConfigParam _cfgChC             = {Text, "channelC", "Channel C", "", PARAM_LENGTH, ""};
 
-#ifdef ESP01
-Channel _channels[] = {
-  {3, LOW, 2, STATE_OFF, &_moduleNameCfg}
-};
-ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
+#ifdef NODEMCUV2
 
-const uint8_t PARAMS_COUNT    = 4;
-const uint8_t CHANNELS_COUNT  = 1;
-const uint8_t TX_PIN          = 1;
-#elif NODEMCUV2
 Channel _channels[] = {
   {D7, LOW, D1, STATE_OFF, &_cfgChA},
   {D6, LOW, D2, STATE_OFF, &_cfgChB},
@@ -152,7 +124,9 @@ ConfigParam   _configParams[] = {_cfgChA, _cfgChB, _cfgChC, _moduleLocationCfg, 
 
 const uint8_t PARAMS_COUNT    = 7;
 const uint8_t CHANNELS_COUNT  = 3;
-#else
+
+#elif ESP12
+
 Channel _channels[] = {
   {13, LOW, 5, STATE_OFF, &_cfgChA},
   {12, LOW, 4, STATE_OFF, &_cfgChB},
@@ -163,6 +137,7 @@ ConfigParam   _configParams[] = {_cfgChA, _cfgChB, _cfgChC, _moduleLocationCfg, 
 
 const uint8_t PARAMS_COUNT    = 7;
 const uint8_t CHANNELS_COUNT  = 3;
+
 #endif
 
 template <class T> void log (T text) {
@@ -182,12 +157,7 @@ template <class T, class U> void log (T key, U value) {
 }
 
 void setup() {
-#ifdef ESP01
-  //to avoid using pin 0 as input
-  Serial.begin(115200, SERIAL_8N1, SERIAL_TX_ONLY, TX_PIN);
-#else
   Serial.begin(115200);
-#endif
   delay(500);
   Serial.println();
   log("Starting module");
@@ -391,11 +361,7 @@ void connectBroker() {
     log(F("Connecting MQTT broker as"), getStationName());
     if (_mqttClient.connect(getStationName())) {
       log(F("MQTT broker Connected"));
-      #ifdef ESP01
-      subscribeTopic(getStationTopic("hrst").c_str());
-      #else
       subscribeTopic(getStationTopic("#").c_str());
-      #endif
       for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
         if (isChannelEnabled(&_channels[i])) {
           subscribeTopic(getChannelTopic(&_channels[i], "cmd").c_str());
@@ -406,6 +372,81 @@ void connectBroker() {
     log(F("Failed. RC:"), _mqttClient.state());
   }
 }
+
+char* getStationName () {
+  if (strlen(_stationName) <= 0) {
+    size_t size = MODULE_TYPE.length() + _moduleLocationCfg.length + _moduleNameCfg.length + 4;
+    String sn;
+    sn.concat(MODULE_TYPE);
+    sn.concat("_");
+    sn.concat(_moduleLocationCfg.value); 
+    sn.concat("_");
+    sn.concat(_moduleNameCfg.value);
+    sn.toCharArray(_stationName, size);
+  } 
+  return _stationName;
+}
+
+bool isIp(String str) {
+  for (int i = 0; i < str.length(); i++) {
+    int c = str.charAt(i);
+    if (c != '.' && (c < '0' || c > '9')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** IP to String? */
+String toStringIp(IPAddress ip) {
+  String res = "";
+  for (int i = 0; i < 3; i++) {
+    res += String((ip >> (8 * i)) & 0xFF) + ".";
+  }
+  res += String(((ip >> 8 * 3)) & 0xFF);
+  return res;
+}
+
+int getRSSIasQuality(int RSSI) {
+  int quality = 0;
+  if (RSSI <= -100) {
+      quality = 0;
+  } else if (RSSI >= -50) {
+      quality = 100;
+  } else {
+      quality = 2 * (RSSI + 100);
+  }
+  return quality;
+}
+
+void subscribeTopic(const char *t) {
+  log("Subscribing mqtt topic", t);
+  _mqttClient.subscribe(t);
+}
+
+String getChannelTopic (Channel *c, String cmd) {
+  return CHANNEL_TYPE + F("/") + _moduleLocationCfg.value + F("/") + c->nameConfig->value + F("/") + cmd;
+}
+
+String getStationTopic (String cmd) {
+  return MODULE_TYPE + F("/") + _moduleLocationCfg.value + F("/") + _moduleNameCfg.value + F("/") + cmd;
+}
+
+// Wifi Manager
+
+const char HTTP_HEAD[] PROGMEM                      = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/><title>{v}</title>";
+const char HTTP_STYLE[] PROGMEM                     = "<style>.c{text-align: center;} div,input{padding:5px;font-size:1em;} input{width:95%;margin-top:3px;margin-bottom:3px;} body{text-align: center;font-family:verdana;} button{border:0;border-radius:0.3rem;background-color:#1fa3ec;color:#fff;line-height:2.4rem;font-size:1.2rem;width:100%;margin-top:3px;} .q{float: right;width: 64px;text-align: right;} .l{background: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAALVBMVEX///8EBwfBwsLw8PAzNjaCg4NTVVUjJiZDRUUUFxdiZGSho6OSk5Pg4eFydHTCjaf3AAAAZElEQVQ4je2NSw7AIAhEBamKn97/uMXEGBvozkWb9C2Zx4xzWykBhFAeYp9gkLyZE0zIMno9n4g19hmdY39scwqVkOXaxph0ZCXQcqxSpgQpONa59wkRDOL93eAXvimwlbPbwwVAegLS1HGfZAAAAABJRU5ErkJggg==\") no-repeat left center;background-size: 1em;}</style>";
+const char HTTP_SCRIPT[] PROGMEM                    = "<script>function c(l){document.getElementById('s').value=l.innerText||l.textContent;document.getElementById('p').focus();}</script>";
+const char HTTP_HEAD_END[] PROGMEM                  = "</head><body><div style='text-align:left;display:inline-block;min-width:260px;'>";
+const char HTTP_ITEM[] PROGMEM                      = "<div><a href='#p' onclick='c(this)'>{v}</a>&nbsp;<span class='q {i}'>{r}%</span></div>";
+const char HTTP_FORM_START[] PROGMEM                = "<form method='get' action='wifisave'><input id='s' name='s' length=32 placeholder='SSID' required><br/><input id='p' name='p' length=64 type='password' placeholder='password' required><hr/>";
+const char HTTP_FORM_INPUT[] PROGMEM                = "<input id='{i}' name='{n}' placeholder='{p}' maxlength={l} value='{v}' {c}><br/>";
+const char HTTP_FORM_INPUT_LIST[] PROGMEM           = "<input id='{i}' name='{n}' placeholder='{p}' list='d' {c}><datalist id='d'{o}></datalist><br/>";
+const char HTTP_FORM_INPUT_LIST_OPTION[] PROGMEM    = "<option>{o}</option>";
+const char HTTP_FORM_END[] PROGMEM                  = "<hr/><button type='submit'>Save</button></form>";
+const char HTTP_SCAN_LINK[] PROGMEM                 = "<br/><div class=\"c\"><a href=\"/scan\">Scan for networks</a></div>";
+const char HTTP_SAVED[] PROGMEM                     = "<div>Credentials Saved<br/>Trying to connect ESP to network.<br/>If it fails reconnect to AP to try again</div>";
+const char HTTP_END[] PROGMEM                       = "</div></body></html>";
 
 void connectWifiNetwork (bool existsConfig) {
   log(F("Connecting to wifi network"));
@@ -718,63 +759,4 @@ bool captivePortal() {
     return true;
   }
   return false;
-}
-
-char* getStationName () {
-  if (strlen(_stationName) <= 0) {
-    size_t size = MODULE_TYPE.length() + _moduleLocationCfg.length + _moduleNameCfg.length + 4;
-    String sn;
-    sn.concat(MODULE_TYPE);
-    sn.concat("_");
-    sn.concat(_moduleLocationCfg.value); 
-    sn.concat("_");
-    sn.concat(_moduleNameCfg.value);
-    sn.toCharArray(_stationName, size);
-  } 
-  return _stationName;
-}
-
-bool isIp(String str) {
-  for (int i = 0; i < str.length(); i++) {
-    int c = str.charAt(i);
-    if (c != '.' && (c < '0' || c > '9')) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/** IP to String? */
-String toStringIp(IPAddress ip) {
-  String res = "";
-  for (int i = 0; i < 3; i++) {
-    res += String((ip >> (8 * i)) & 0xFF) + ".";
-  }
-  res += String(((ip >> 8 * 3)) & 0xFF);
-  return res;
-}
-
-int getRSSIasQuality(int RSSI) {
-  int quality = 0;
-  if (RSSI <= -100) {
-      quality = 0;
-  } else if (RSSI >= -50) {
-      quality = 100;
-  } else {
-      quality = 2 * (RSSI + 100);
-  }
-  return quality;
-}
-
-void subscribeTopic(const char *t) {
-  log("Subscribing mqtt topic", t);
-  _mqttClient.subscribe(t);
-}
-
-String getChannelTopic (Channel *c, String cmd) {
-  return CHANNEL_TYPE + F("/") + _moduleLocationCfg.value + F("/") + c->nameConfig->value + F("/") + cmd;
-}
-
-String getStationTopic (String cmd) {
-  return MODULE_TYPE + F("/") + _moduleLocationCfg.value + F("/") + _moduleNameCfg.value + F("/") + cmd;
 }

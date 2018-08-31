@@ -7,6 +7,7 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h> 
 #include <ESP8266mDNS.h>
+#include <time.h>
 
 extern "C" {
   #include "user_interface.h"
@@ -46,35 +47,45 @@ struct ConfigParam {
   }
 };
 
+struct Channel {
+  //uint8_t       soilSensorPin;
+  //int           soilSensorLastValue;
+  //uint8_t           minSoilHumidity;
+  //uint8_t           minAirHumidity;
+  //uint8_t           minAirTemperature;
+  char*         name;
+  uint8_t       valvePin;
+  char          valveState;
+  uint8_t       irrigationTime; // In minutes
+
+  Channel(const char* _name, uint8_t _vp, uint8_t _vs, uint8_t _it) {
+    name = new char[CHANNEL_NAME_LENGTH + 1];
+    updateName(_name);
+    valvePin = _vp;
+    valveState = _vs;
+    irrigationTime = _it;
+  }
+
+  void updateName (const char *v) {
+    String s = String(v);
+    s.toCharArray(name, CHANNEL_NAME_LENGTH);
+  }
+};
+
 // DNS server
 const uint8_t DNS_PORT = 53;
 
-const char*   CONFIG_FILE    = "/config.json";
-const char*   SETTINGS_FILE  = "/settings.json";
+const char*   CONFIG_FILE       = "/config.json";
+const char*   SETTINGS_FILE     = "/settings.json";
+const char*   DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
+const char*   MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
 
 /* Possible switch states */
 const char    STATE_OFF      = '0';
 const char    STATE_ON       = '1';
 
 /* Module settings */
-const String  MODULE_TYPE  = "lightStation";
-const String  CHANNEL_TYPE = "light";
-
-struct Channel {
-  uint8_t       switchPin;
-  int           switchState;
-  uint8_t       relayPin;
-  char          relayState;
-  ConfigParam*  nameConfig;
-
-  Channel(uint8_t _sp, int _ss, uint8_t _rp, char _rs, ConfigParam* _cfgp) {
-    switchPin = _sp;
-    switchState = _ss;
-    relayPin = _rp;
-    relayState = _rs;
-    nameConfig = _cfgp;
-  }
-};
+const String  MODULE_TYPE  = "irrigation";
 
 std::unique_ptr<ESP8266WebServer>  _server;
 std::unique_ptr<DNSServer>         _dnsServer;
@@ -84,6 +95,7 @@ const char*     _ssid               = "";
 const char*     _pass               = "";
 const char*     _apPass             = "12345678";
 char            _stationName[PARAM_LENGTH * 3 + 4];
+const char*     _cronExpression[]   = {"*","*","21","*","AUG","?"};
 
 #ifdef WIFI_MIN_QUALITY
 const uint8_t   _minimumQuality     = WIFI_MIN_QUALITY;
@@ -101,55 +113,55 @@ WiFiClient              _wifiClient;
 PubSubClient            _mqttClient(_wifiClient);
 ESP8266WebServer        _httpServer(80);
 ESP8266HTTPUpdateServer _httpUpdater;
+
 long                    _nextBrokerConnAtte = 0;
+long                    _lastTimerCheck     = -TIMER_CHECK_THRESHOLD * 60000; // TIMER_CHECK_THRESHOLD is in minutes
 
 ConfigParam _moduleNameCfg      = {Text, "moduleName", "Module name", "", PARAM_LENGTH, "required"};
 ConfigParam _moduleLocationCfg  = {Text, "moduleLocation", "Module location", "", PARAM_LENGTH, "required"};
 ConfigParam _mqttPortCfg        = {Text, "mqttPort", "MQTT port", "", PARAM_LENGTH, ""};
 ConfigParam _mqttHostCfg        = {Text, "mqttHost", "MQTT host", "", PARAM_LENGTH, ""};
 
-ConfigParam _cfgChA             = {Text, "channelA", "Channel A", "", PARAM_LENGTH, ""};
-ConfigParam _cfgChB             = {Text, "channelB", "Channel B", "", PARAM_LENGTH, ""};
-ConfigParam _cfgChC             = {Text, "channelC", "Channel C", "", PARAM_LENGTH, ""};
-
 #ifdef NODEMCUV2
 
 Channel _channels[] = {
-  {D7, LOW, D1, STATE_OFF, &_cfgChA},
-  {D6, LOW, D2, STATE_OFF, &_cfgChB},
-  {D0, LOW, D4, STATE_OFF, &_cfgChC}
+  // Name, valve pin, valve state, irr time
+  {"A", D7, STATE_OFF, 1},
+  // {"B", D6, STATE_OFF, 1},
+  // {"C", D0, STATE_OFF, 1}
 };
 
-ConfigParam   _configParams[] = {_cfgChA, _cfgChB, _cfgChC, _moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
+ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
 
-const uint8_t PARAMS_COUNT    = 7;
+const uint8_t PARAMS_COUNT    = 4;
 const uint8_t CHANNELS_COUNT  = 3;
 
 #elif ESP12
 
 Channel _channels[] = {
-  {13, LOW, 5, STATE_OFF, &_cfgChA},
-  {12, LOW, 4, STATE_OFF, &_cfgChB},
-  {16, LOW, 2, STATE_OFF, &_cfgChC}
+  // Name, valve pin, valve state, irr time
+  {"A", 13, STATE_OFF, 1},
+  // {"B", 12, STATE_OFF, 1},
+  // {"C", 16, STATE_OFF, 1}
 };
 
-ConfigParam   _configParams[] = {_cfgChA, _cfgChB, _cfgChC, _moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
+ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
 
-const uint8_t PARAMS_COUNT    = 7;
+const uint8_t PARAMS_COUNT    = 4;
 const uint8_t CHANNELS_COUNT  = 3;
 
 #endif
 
 template <class T> void log (T text) {
   if (LOGGING) {
-    Serial.print("*SW: ");
+    Serial.print("*IRR: ");
     Serial.println(text);
   }
 }
 
 template <class T, class U> void log (T key, U value) {
   if (LOGGING) {
-    Serial.print("*SW: ");
+    Serial.print("*IRR: ");
     Serial.print(key);
     Serial.print(": ");
     Serial.println(value);
@@ -163,12 +175,32 @@ void setup() {
   log("Starting module");
   connectWifiNetwork(loadConfig());
   log(F("Connected to wifi network. Local IP"), WiFi.localIP());
-  // pins settings
-  for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-    pinMode(_channels[i].relayPin, OUTPUT);
-    pinMode(_channels[i].switchPin, INPUT);
-    digitalWrite(_channels[i].switchPin, HIGH);
+  configTime(TIMEZONE * 3600, 0, "br.pool.ntp.org ", "cl.pool.ntp.org", "co.pool.ntp.org"); // brazil, chile, colombia
+  log("Waiting for time");
+  while (!time(nullptr)) {
+    Serial.print(".");
+    delay(1000);
   }
+  time_t now = time(nullptr);
+  log("ctime", ctime(&now));
+  struct tm * ptm;
+  ptm = gmtime(&now);
+  log("tm_year", ptm->tm_year);
+  log("tm_mon", ptm->tm_mon);
+  log("tm_mday", ptm->tm_mday);
+  log("tm_hour", ptm->tm_hour);
+  log("tm_min", ptm->tm_min);
+  log("tm_sec", ptm->tm_sec);
+  log("tm_wday", ptm->tm_wday);
+  log("tm_isdst", ptm->tm_isdst);
+  log("tm_yday", ptm->tm_yday);
+
+  // pins settings
+  // for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
+    // pinMode(_channels[i].valvePin, OUTPUT);
+    // pinMode(_channels[i].soilSensorPin, INPUT);
+    // digitalWrite(_channels[i].soilSensorPin, HIGH);
+  // }
   log(F("Configuring MQTT broker"));
   String port = String(_mqttPortCfg.value);
   log(F("Port"), port);
@@ -184,6 +216,48 @@ void setup() {
   log("HTTPUpdateServer ready."); 
   log("Open http://" + String(getStationName()) + ".local/update");
   log("Open http://" + WiFi.localIP().toString() + "/update");
+}
+
+void loop() {
+  _httpServer.handleClient();
+  // processPhysicalInput();
+  if (timeToCheckTimer()) {
+    if (timeToIrrigate()) {
+      startIrrigation();
+    }
+  }
+  if (!_mqttClient.connected()) {
+    connectBroker();
+  }
+  _mqttClient.loop();
+}
+
+bool timeToCheckTimer () {
+  bool isTime = _lastTimerCheck + TIMER_CHECK_THRESHOLD * 60000 < millis();
+  _lastTimerCheck = isTime ? millis() : _lastTimerCheck;
+  return isTime;
+}
+
+bool timeToIrrigate () {
+  bool timeToIrrigate = true;
+  time_t now = time(nullptr);
+  log("ctime", ctime(&now));
+  struct tm * ptm;
+  ptm = gmtime(&now);
+  String dow = ptm->tm_wday < 7 ? String(DAYS_OF_WEEK[ptm->tm_wday]): "";
+  String mon = ptm->tm_mon < 12 ? String(MONTHS_OF_YEAR[ptm->tm_mon]): "";
+  timeToIrrigate &= _cronExpression[5] == "?" || String(_cronExpression[5]).equalsIgnoreCase(dow) || String(_cronExpression[5]).equals(String(ptm->tm_wday)); // Day of week
+  timeToIrrigate &= _cronExpression[4] == "*" || String(_cronExpression[4]).equalsIgnoreCase(mon) || String(_cronExpression[4]).equals(String(ptm->tm_mon)); // Month
+  timeToIrrigate &= _cronExpression[3] == "*" || String(_cronExpression[3]).equals(String(ptm->tm_mday)); // Day of month
+  timeToIrrigate &= _cronExpression[2] == "*" || String(_cronExpression[2]).equals(String(ptm->tm_hour)); // Hour
+  timeToIrrigate &= _cronExpression[1] == "*" || String(_cronExpression[1]).toInt() == ptm->tm_min || (String(_cronExpression[1]).toInt() > ptm->tm_min && String(_cronExpression[1]).toInt() - TIMER_CHECK_THRESHOLD < ptm->tm_min); // Minute
+  // timeToIrrigate &= _cronExpression[0] == "*" || String(_cronExpression[0]).equals(String(ptm->tm_sec)); // Second
+  return timeToIrrigate;
+}
+
+void startIrrigation() {
+  log("Irrigation sequence started");
+  log("Irrigation sequence ended");
 }
 
 bool loadConfig() { 
@@ -250,15 +324,6 @@ void saveConfig () {
   }
 }
 
-void loop() {
-  _httpServer.handleClient();
-  processPhysicalInput();
-  if (!_mqttClient.connected()) {
-    connectBroker();
-  }
-  _mqttClient.loop();
-}
-
 void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length) {
   log(F("Received mqtt message topic"), topic);
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
@@ -285,7 +350,7 @@ void hardReset () {
 }
 
 void publishState (Channel *c) {
-  _mqttClient.publish(getChannelTopic(c, "state").c_str(), new char[2]{c->relayState, '\0'});
+  _mqttClient.publish(getChannelTopic(c, "state").c_str(), new char[2]{c->valveState, '\0'});
 }
 
 void processCommand (Channel *c, unsigned char* payload, unsigned int length) {
@@ -300,7 +365,7 @@ void processCommand (Channel *c, unsigned char* payload, unsigned int length) {
   switch (payload[0]) {
     case '0':
     case '1':
-      setRelayState(c, payload[0]);
+      setvalveState(c, payload[0]);
     break;
     default:
       log(F("Invalid state"), payload[0]);
@@ -309,50 +374,50 @@ void processCommand (Channel *c, unsigned char* payload, unsigned int length) {
   publishState(c);
 }
 
-void processPhysicalInput() {
-  for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-    if (isChannelEnabled(&_channels[i])) {
-      processChannelInput(&_channels[i]);
-    }
-  }
-}
+// void processPhysicalInput() {
+//   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
+//     if (isChannelEnabled(&_channels[i])) {
+//       processChannelInput(&_channels[i]);
+//     }
+//   }
+// }
 
-void processChannelInput(Channel *c) {
-  int read = digitalRead(c->switchPin);
-  if (read != c->switchState) {
-    log(F("Phisical switch state has changed. Updating module"), c->nameConfig->value);
-    c->switchState = read;
-    flipRelayState(c);
-    publishState(c);
-  }
-}
+// void processChannelInput(Channel *c) {
+//   int read = digitalRead(c->soilSensorPin);
+//   if (read != c->soilSensorLastValue) {
+//     log(F("Phisical switch state has changed. Updating module"), c->name);
+//     c->soilSensorLastValue = read;
+//     flipvalveState(c);
+//     publishState(c);
+//   }
+// }
 
 bool isChannelEnabled (Channel *c) {
-  return c->nameConfig->value != NULL && strlen(c->nameConfig->value) > 0;
+  return c->name != NULL && strlen(c->name) > 0;
 }
 
-void setRelayState (Channel *c, char newState) {
-  if (c->relayState != newState) {
-    flipRelayState(c);
+void setvalveState (Channel *c, char newState) {
+  if (c->valveState != newState) {
+    flipvalveState(c);
   } else {
-    log("Channel previous state is the same, no update done", c->nameConfig->value);
+    log("Channel previous state is the same, no update done", c->name);
   }
 }
 
-void flipRelayState (Channel *c) {
-  c->relayState = c->relayState == STATE_OFF ? STATE_ON : STATE_OFF;
-  switch (c->relayState) {
+void flipvalveState (Channel *c) {
+  c->valveState = c->valveState == STATE_OFF ? STATE_ON : STATE_OFF;
+  switch (c->valveState) {
     case STATE_OFF:
-      digitalWrite(c->relayPin, LOW);
+      digitalWrite(c->valvePin, LOW);
       break;
     case STATE_ON:
-      digitalWrite(c->relayPin, HIGH);
+      digitalWrite(c->valvePin, HIGH);
       break;
     default:
       break;
   }
-  log(F("Channel updated"), c->nameConfig->value);
-  log(F("State changed to"), c->relayState);
+  log(F("Channel updated"), c->name);
+  log(F("State changed to"), c->valveState);
 }
 
 void connectBroker() {
@@ -425,7 +490,7 @@ void subscribeTopic(const char *t) {
 }
 
 String getChannelTopic (Channel *c, String cmd) {
-  return CHANNEL_TYPE + F("/") + _moduleLocationCfg.value + F("/") + c->nameConfig->value + F("/") + cmd;
+  return MODULE_TYPE + F("/") + _moduleLocationCfg.value + F("/") + c->name + F("/") + cmd;
 }
 
 String getStationTopic (String cmd) {

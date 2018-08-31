@@ -179,6 +179,7 @@ void setup() {
     Serial.print(".");
     delay(1000);
   }
+  // Default cron every day at 4:00 AM
   updateCronExpression("0","0","4","*","*","?");
   // pins settings
   // for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
@@ -442,9 +443,9 @@ void connectBroker() {
           subscribeTopic(getChannelTopic(&_channels[i], "cmd").c_str());
         }
       }
+    } else {
+      log(F("Failed. RC:"), _mqttClient.state());
     }
-  } else {
-    log(F("Failed. RC:"), _mqttClient.state());
   }
 }
 

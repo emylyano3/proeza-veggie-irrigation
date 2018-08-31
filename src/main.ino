@@ -70,6 +70,10 @@ struct Channel {
     enabled = true;
   }
 
+  void updateIttigationDuration (uint8_t _id) {
+    irrigationDuration = _id * MILLIS_IN_MINUTE;
+  }
+
   void updateName (const char *v) {
     String s = String(v);
     s.toCharArray(name, CHANNEL_NAME_LENGTH);
@@ -124,30 +128,28 @@ uint8_t     _currChannel      = 0;
 #ifdef NODEMCUV2
 
 Channel _channels[] = {
-  // Name, valve pin, valve state, irr time
-  {"Tomates", D7, STATE_OFF, 1},
-  {"Huerta vertical", D6, STATE_OFF, 1},
-  // {"C", D0, STATE_OFF, 1}
+  // Name, valve pin, state, irr time (minutes)
+  {"macetero", D7, STATE_OFF, 1},
+  {"huerta_vertical", D6, STATE_OFF, 1}
 };
 
 ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
 
 const uint8_t PARAMS_COUNT    = 4;
-const uint8_t CHANNELS_COUNT  = 1;
+const uint8_t CHANNELS_COUNT  = 2;
 
 #elif ESP12
 
 Channel _channels[] = {
-  // Name, valve pin, valve state, irr time
-  {"A", 13, STATE_OFF, 1},
-  // {"B", 12, STATE_OFF, 1},
-  // {"C", 16, STATE_OFF, 1}
+  // Name, valve pin, state, irr time (minutes)
+  {"macetero", 13, STATE_OFF, 1},
+  {"huerta_vertical", 12, STATE_OFF, 1}
 };
 
 ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
 
 const uint8_t PARAMS_COUNT    = 4;
-const uint8_t CHANNELS_COUNT  = 1;
+const uint8_t CHANNELS_COUNT  = 2;
 
 #endif
 
@@ -208,12 +210,12 @@ void setup() {
 
 void loop() {
   _httpServer.handleClient();
-  checkIrrigation();
   if (!_mqttClient.connected()) {
     connectBroker();
   }
+  checkIrrigation();
   _mqttClient.loop();
-  delay(100);
+  delay(1000);
 }
 
 void checkIrrigation() {
@@ -236,6 +238,7 @@ void checkIrrigation() {
       } else {
         if (_channels[_currChannel].state == STATE_OFF) {
           log("Starting channel", _channels[_currChannel].name);
+          log("Channel irrigation duration", _channels[_currChannel].irrigationDuration);
           openValve(&_channels[_currChannel]);
           _channels[_currChannel].irrigationStopTime = millis() + _channels[_currChannel].irrigationDuration;
         } else {
@@ -380,16 +383,41 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
   } else if (String(topic).equals(getStationTopic("updateCron"))) {
     updateCron(payload, length);
   } else {
-    log(F("Unknown topic"));
+    // Channels topics
+    for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
+      if (getChannelTopic(&_channels[i], "enable").equals(topic)) {
+        enableChannel(&_channels[i]);
+      } else if (getChannelTopic(&_channels[i], "disable").equals(topic)) {
+        disableChannel(&_channels[i]);
+      } else if (getChannelTopic(&_channels[i], "irrdur").equals(topic)) {
+        updateIrrigationDuration(&_channels[i], payload, length);
+      }
+    }
   }
-  // Channels topics
-  // for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-  //   if (isChannelEnabled(&_channels[i])) {
-  //     if (getChannelTopic(&_channels[i], "cmd").equals(topic)) {
-  //       return;
-  //     }
-  //   }
-  // }
+}
+
+void enableChannel(Channel* c) {
+  c->enabled = true;
+}
+
+void disableChannel(Channel* c) {
+  c->enabled = false;
+}
+
+void updateIrrigationDuration(Channel* c, unsigned char* payload, unsigned int length) {
+  log("Updating irrigation duration");
+  if (length < 1) {
+    log("Invalid payload");
+    return;
+  }
+  char buff[length + 1];
+  for (uint16_t i = 0 ; i < length; ++ i) {
+    buff[i] = payload[i];
+  }
+  buff[length] = '\0';
+  log("New duration for channel", c->name);
+  log("Duration", String(buff));
+  c->updateIttigationDuration(String(buff).toInt());
 }
 
 void hardReset () {
@@ -407,11 +435,11 @@ void updateCron(unsigned char* payload, unsigned int length) {
   } else {
     unsigned int i = 0;
     size_t k = 0;
-    while (i < length && k < 6) {
+    while (i < length && k < 6) { // cron consist of 6 chunks
       if (payload[i] == ' ') {
         ++i;
       } else {
-        char aux[] = {'\0','\0','\0','\0'};
+        char aux[] = {'\0','\0','\0','\0'}; // cron chunks cant have more than 3 chars
         int j = 0;
         while (i < length && payload[i] != ' ' && j < 3) {
           aux[j++] = payload[i++];
@@ -435,7 +463,7 @@ void publishState (Channel *c) {
 }
 
 bool isChannelEnabled (Channel *c) {
-  return c->name != NULL && strlen(c->name) > 0;
+  return c->enabled && c->name != NULL && strlen(c->name) > 0;
 }
 
 void connectBroker() {
@@ -468,16 +496,6 @@ char* getStationName () {
     sn.toCharArray(_stationName, size);
   } 
   return _stationName;
-}
-
-bool isIp(String str) {
-  for (int i = 0; i < str.length(); i++) {
-    int c = str.charAt(i);
-    if (c != '.' && (c < '0' || c > '9')) {
-      return false;
-    }
-  }
-  return true;
 }
 
 void subscribeTopic(const char *t) {
@@ -820,6 +838,16 @@ bool captivePortal() {
     return true;
   }
   return false;
+}
+
+bool isIp(String str) {
+  for (int i = 0; i < str.length(); i++) {
+    int c = str.charAt(i);
+    if (c != '.' && (c < '0' || c > '9')) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** IP to String? */

@@ -13,6 +13,12 @@ extern "C" {
   #include "user_interface.h"
 }
 
+const char*   CONFIG_FILE       = "/config.json";
+const char*   SETTINGS_FILE     = "/settings.json";
+const char*   DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
+const char*   MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
+const long    MILLIS_IN_MINUTE  = 60000;
+
 enum InputType {Combo, Text};
 
 struct ConfigParam {
@@ -48,22 +54,20 @@ struct ConfigParam {
 };
 
 struct Channel {
-  //uint8_t       soilSensorPin;
-  //int           soilSensorLastValue;
-  //uint8_t           minSoilHumidity;
-  //uint8_t           minAirHumidity;
-  //uint8_t           minAirTemperature;
   char*         name;
   uint8_t       valvePin;
-  char          valveState;
-  uint8_t       irrigationTime; // In minutes
+  char          state;
+  long          irrigationDuration; // millis
+  long          irrigationStopTime; // millis
+  bool          enabled;
 
-  Channel(const char* _name, uint8_t _vp, uint8_t _vs, uint8_t _it) {
+  Channel(const char* _name, uint8_t _vp, uint8_t _vs, uint8_t _id) {
     name = new char[CHANNEL_NAME_LENGTH + 1];
     updateName(_name);
     valvePin = _vp;
-    valveState = _vs;
-    irrigationTime = _it;
+    state = _vs;
+    irrigationDuration = _id * MILLIS_IN_MINUTE;
+    enabled = true;
   }
 
   void updateName (const char *v) {
@@ -71,11 +75,6 @@ struct Channel {
     s.toCharArray(name, CHANNEL_NAME_LENGTH);
   }
 };
-
-const char*   CONFIG_FILE       = "/config.json";
-const char*   SETTINGS_FILE     = "/settings.json";
-const char*   DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
-const char*   MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
 
 /* Possible switch states */
 const char    STATE_OFF         = '0';
@@ -111,7 +110,7 @@ ESP8266WebServer        _httpServer(80);
 ESP8266HTTPUpdateServer _httpUpdater;
 
 long                    _nextBrokerConnAtte = 0;
-long                    _lastTimerCheck     = -TIMER_CHECK_THRESHOLD * 60000; // TIMER_CHECK_THRESHOLD is in minutes
+long                    _lastTimerCheck     = -TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE; // TIMER_CHECK_THRESHOLD is in minutes
 
 ConfigParam _moduleNameCfg      = {Text, "moduleName", "Module name", "", PARAM_LENGTH, "required"};
 ConfigParam _moduleLocationCfg  = {Text, "moduleLocation", "Module location", "", PARAM_LENGTH, "required"};
@@ -119,13 +118,15 @@ ConfigParam _mqttPortCfg        = {Text, "mqttPort", "MQTT port", "", PARAM_LENG
 ConfigParam _mqttHostCfg        = {Text, "mqttHost", "MQTT host", "", PARAM_LENGTH, ""};
 
 char*       _cronExpression[] = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
+bool        _irrigating       = false;
+uint8_t     _currChannel      = 0;
 
 #ifdef NODEMCUV2
 
 Channel _channels[] = {
   // Name, valve pin, valve state, irr time
-  {"A", D7, STATE_OFF, 1},
-  // {"B", D6, STATE_OFF, 1},
+  {"Tomates", D7, STATE_OFF, 1},
+  {"Huerta vertical", D6, STATE_OFF, 1},
   // {"C", D0, STATE_OFF, 1}
 };
 
@@ -151,19 +152,19 @@ const uint8_t CHANNELS_COUNT  = 1;
 #endif
 
 template <class T> void log (T text) {
-  if (LOGGING) {
-    Serial.print("*IRR: ");
-    Serial.println(text);
-  }
+  #ifdef LOGGING
+  Serial.print("*IRR: ");
+  Serial.println(text);
+  #endif
 }
 
 template <class T, class U> void log (T key, U value) {
-  if (LOGGING) {
-    Serial.print("*IRR: ");
-    Serial.print(key);
-    Serial.print(": ");
-    Serial.println(value);
-  }
+  #ifdef LOGGING
+  Serial.print("*IRR: ");
+  Serial.print(key);
+  Serial.print(": ");
+  Serial.println(value);
+  #endif
 }
 
 void setup() {
@@ -177,16 +178,17 @@ void setup() {
   log("Waiting for time");
   while (!time(nullptr)) {
     Serial.print(".");
-    delay(1000);
+    delay(500);
   }
+  Serial.println();
   // Default cron every day at 4:00 AM
   updateCronExpression("0","0","4","*","*","?");
   // pins settings
-  // for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-    // pinMode(_channels[i].valvePin, OUTPUT);
+  for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
+    pinMode(_channels[i].valvePin, OUTPUT);
     // pinMode(_channels[i].soilSensorPin, INPUT);
     // digitalWrite(_channels[i].soilSensorPin, HIGH);
-  // }
+  }
   log(F("Configuring MQTT broker"));
   String port = String(_mqttPortCfg.value);
   log(F("Port"), port);
@@ -194,7 +196,7 @@ void setup() {
   _mqttClient.setServer(_mqttHostCfg.value, (uint16_t) port.toInt());
   _mqttClient.setCallback(receiveMqttMessage);
 
-  // OTA Update Stuff
+  log(F("Setting OTA update"));
   MDNS.begin(getStationName());
   MDNS.addService("http", "tcp", 80);
   _httpUpdater.setup(&_httpServer);
@@ -206,15 +208,46 @@ void setup() {
 
 void loop() {
   _httpServer.handleClient();
-  if (timeToCheckTimer()) {
-    if (timeToIrrigate()) {
-      startIrrigation();
-    }
-  }
+  checkIrrigation();
   if (!_mqttClient.connected()) {
     connectBroker();
   }
   _mqttClient.loop();
+  delay(100);
+}
+
+void checkIrrigation() {
+  if (!_irrigating) {
+    if (isTimeToCheckSchedule()) {
+      if (isTimeToIrrigate()) {
+        log("Irrigation sequence started");
+        _irrigating = true;
+        _currChannel = 0;
+      }
+    }
+  } else {
+    if (_currChannel >= CHANNELS_COUNT) {
+      log("No more channels to process. Stop irrigation sequence.");
+      _irrigating = false;
+    } else {
+      if (!isChannelEnabled(&_channels[_currChannel])) {
+        log("Channel is disabled, going to next one.");
+        ++_currChannel;
+      } else {
+        if (_channels[_currChannel].state == STATE_OFF) {
+          log("Starting channel", _channels[_currChannel].name);
+          openValve(&_channels[_currChannel]);
+          _channels[_currChannel].irrigationStopTime = millis() + _channels[_currChannel].irrigationDuration;
+        } else {
+           if (millis() > _channels[_currChannel].irrigationStopTime) {
+            log("Stoping channel", _channels[_currChannel].name);
+            closeValve(&_channels[_currChannel++]);
+            delay(500);
+          }
+        }
+      }
+    }
+  }
 }
 
 void updateCronExpression (const char* sec, const char* min, const char* hour, const char* dom, const char* mon, const char* dow) {
@@ -227,36 +260,52 @@ void updateCronExpression (const char* sec, const char* min, const char* hour, c
 }
 
 void updateCronExpressionChunk(const char* a, uint8_t index) {
-  // String(a).toCharArray(_cronExpression[index], strlen(a));
   String(a).toCharArray(_cronExpression[index], 4);
 }
 
-bool timeToCheckTimer () {
-  bool isTime = _lastTimerCheck + TIMER_CHECK_THRESHOLD * 60000 < millis();
+bool isTimeToCheckSchedule () {
+  bool isTime = _lastTimerCheck + TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE < millis();
   _lastTimerCheck = isTime ? millis() : _lastTimerCheck;
   return isTime;
 }
 
-bool timeToIrrigate () {
-  bool timeToIrrigate = true;
+bool isTimeToIrrigate () {
+  log("Checking if is time to start irrigation");
   time_t now = time(nullptr);
-  log("ctime", ctime(&now));
+  Serial.print("Current time ");
+  Serial.print(ctime(&now));
   struct tm * ptm;
   ptm = gmtime(&now);
   String dow = ptm->tm_wday < 7 ? String(DAYS_OF_WEEK[ptm->tm_wday]): "";
   String mon = ptm->tm_mon < 12 ? String(MONTHS_OF_YEAR[ptm->tm_mon]): "";
-  timeToIrrigate &= _cronExpression[5] == "?" || String(_cronExpression[5]).equalsIgnoreCase(dow) || String(_cronExpression[5]).equals(String(ptm->tm_wday)); // Day of week
-  timeToIrrigate &= _cronExpression[4] == "*" || String(_cronExpression[4]).equalsIgnoreCase(mon) || String(_cronExpression[4]).equals(String(ptm->tm_mon)); // Month
-  timeToIrrigate &= _cronExpression[3] == "*" || String(_cronExpression[3]).equals(String(ptm->tm_mday)); // Day of month
-  timeToIrrigate &= _cronExpression[2] == "*" || String(_cronExpression[2]).equals(String(ptm->tm_hour)); // Hour
-  timeToIrrigate &= _cronExpression[1] == "*" || String(_cronExpression[1]).toInt() == ptm->tm_min || (String(_cronExpression[1]).toInt() > ptm->tm_min && String(_cronExpression[1]).toInt() - TIMER_CHECK_THRESHOLD < ptm->tm_min); // Minute
-  // timeToIrrigate &= _cronExpression[0] == "*" || String(_cronExpression[0]).equals(String(ptm->tm_sec)); // Second
+  // Evaluates cron at minute level. Seconds granularity is not needed for irrigarion scheduling.
+  bool timeToIrrigate = true;
+  timeToIrrigate &= String(_cronExpression[5]).equals("?") || String(_cronExpression[5]).equalsIgnoreCase(dow) || String(_cronExpression[5]).equals(String(ptm->tm_wday + 1)); // Day of week
+  timeToIrrigate &= String(_cronExpression[4]).equals("*") || String(_cronExpression[4]).equalsIgnoreCase(mon) || String(_cronExpression[4]).equals(String(ptm->tm_mon + 1)); // Month
+  timeToIrrigate &= String(_cronExpression[3]).equals("*") || String(_cronExpression[3]).equals(String(ptm->tm_mday)); // Day of month
+  timeToIrrigate &= String(_cronExpression[2]).equals("*") || String(_cronExpression[2]).equals(String(ptm->tm_hour)); // Hour
+  timeToIrrigate &= String(_cronExpression[1]).equals("*") || String(_cronExpression[1]).toInt() == ptm->tm_min || (String(_cronExpression[1]).toInt() > ptm->tm_min && String(_cronExpression[1]).toInt() - TIMER_CHECK_THRESHOLD < ptm->tm_min); // Minute
   return timeToIrrigate;
 }
 
-void startIrrigation() {
-  log("Irrigation sequence started");
-  log("Irrigation sequence ended");
+void openValve(Channel* c) {
+  log("Opening valve of channel", c->name);
+  if (c->state == STATE_ON) {
+    log("Valve already opened, skipping");
+  } else {
+    digitalWrite(c->valvePin, LOW);
+    c->state = STATE_ON;
+  }
+}
+
+void closeValve(Channel* c) {
+  log("Closing valve of channel", c->name);
+  if (c->state == STATE_OFF) {
+    log("Valve already closed, skipping");
+  } else {
+    digitalWrite(c->valvePin, HIGH);
+    c->state = STATE_OFF;
+  }
 }
 
 bool loadConfig() { 
@@ -274,10 +323,10 @@ bool loadConfig() {
           DynamicJsonBuffer jsonBuffer;
           JsonObject& json = jsonBuffer.parseObject(buf);
           log("Configuration file loaded");
-          if (LOGGING) {
-            json.printTo(Serial);
-            Serial.println();
-          }
+          #ifdef LOGGING
+          json.printTo(Serial);
+          Serial.println();
+          #endif
           if (json.success()) {
             for (uint8_t i = 0; i < PARAMS_COUNT; ++i) {
               _configParams[i].updateValue(json[_configParams[i].name]);
@@ -325,14 +374,7 @@ void saveConfig () {
 
 void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length) {
   log(F("Received mqtt message topic"), topic);
-  for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-    if (isChannelEnabled(&_channels[i])) {
-      if (getChannelTopic(&_channels[i], "cmd").equals(topic)) {
-        processCommand(&_channels[i], payload, length);
-        return;
-      }
-    }
-  }
+  // Station topics
   if (String(topic).equals(getStationTopic("hrst"))) {
     hardReset();
   } else if (String(topic).equals(getStationTopic("updateCron"))) {
@@ -340,6 +382,14 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
   } else {
     log(F("Unknown topic"));
   }
+  // Channels topics
+  // for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
+  //   if (isChannelEnabled(&_channels[i])) {
+  //     if (getChannelTopic(&_channels[i], "cmd").equals(topic)) {
+  //       return;
+  //     }
+  //   }
+  // }
 }
 
 void hardReset () {
@@ -370,65 +420,22 @@ void updateCron(unsigned char* payload, unsigned int length) {
       }
     }
   }
+  #ifdef LOGGING
   Serial.print("New cron expression: ");
   for (int i = 0; i < 6; ++i) {
     Serial.print(_cronExpression[i]);
     Serial.print(" ");
   }
   Serial.println();
+  #endif
 }
 
 void publishState (Channel *c) {
-  _mqttClient.publish(getChannelTopic(c, "state").c_str(), new char[2]{c->valveState, '\0'});
-}
-
-void processCommand (Channel *c, unsigned char* payload, unsigned int length) {
-  if (length != 1 || !payload) {
-    log(F("Invalid payload. Ignoring."));
-    return;
-  }
-  if (!isDigit(payload[0])) {
-    log(F("Invalid payload format. Ignoring."));
-    return;
-  }
-  switch (payload[0]) {
-    case '0':
-    case '1':
-      setvalveState(c, payload[0]);
-    break;
-    default:
-      log(F("Invalid state"), payload[0]);
-    return;
-  } 
-  publishState(c);
+  _mqttClient.publish(getChannelTopic(c, "state").c_str(), new char[2]{c->state, '\0'});
 }
 
 bool isChannelEnabled (Channel *c) {
   return c->name != NULL && strlen(c->name) > 0;
-}
-
-void setvalveState (Channel *c, char newState) {
-  if (c->valveState != newState) {
-    flipvalveState(c);
-  } else {
-    log("Channel previous state is the same, no update done", c->name);
-  }
-}
-
-void flipvalveState (Channel *c) {
-  c->valveState = c->valveState == STATE_OFF ? STATE_ON : STATE_OFF;
-  switch (c->valveState) {
-    case STATE_OFF:
-      digitalWrite(c->valvePin, LOW);
-      break;
-    case STATE_ON:
-      digitalWrite(c->valvePin, HIGH);
-      break;
-    default:
-      break;
-  }
-  log(F("Channel updated"), c->name);
-  log(F("State changed to"), c->valveState);
 }
 
 void connectBroker() {
@@ -437,10 +444,10 @@ void connectBroker() {
     log(F("Connecting MQTT broker as"), getStationName());
     if (_mqttClient.connect(getStationName())) {
       log(F("MQTT broker Connected"));
-      subscribeTopic(getStationTopic("#").c_str());
+      subscribeTopic(getStationTopic("+").c_str());
       for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
         if (isChannelEnabled(&_channels[i])) {
-          subscribeTopic(getChannelTopic(&_channels[i], "cmd").c_str());
+          subscribeTopic(getChannelTopic(&_channels[i], "#").c_str());
         }
       }
     } else {
@@ -479,7 +486,7 @@ void subscribeTopic(const char *t) {
 }
 
 String getChannelTopic (Channel *c, String cmd) {
-  return MODULE_TYPE + F("/") + _moduleLocationCfg.value + F("/") + c->name + F("/") + cmd;
+  return MODULE_TYPE + F("/") + _moduleLocationCfg.value + F("/") + _moduleNameCfg.value + F("/") + c->name + F("/") + cmd;
 }
 
 String getStationTopic (String cmd) {

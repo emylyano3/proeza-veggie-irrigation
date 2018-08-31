@@ -72,30 +72,17 @@ struct Channel {
   }
 };
 
-// DNS server
-const uint8_t DNS_PORT = 53;
-
 const char*   CONFIG_FILE       = "/config.json";
 const char*   SETTINGS_FILE     = "/settings.json";
 const char*   DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
 const char*   MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
 
 /* Possible switch states */
-const char    STATE_OFF      = '0';
-const char    STATE_ON       = '1';
+const char    STATE_OFF         = '0';
+const char    STATE_ON          = '1';
 
 /* Module settings */
-const String  MODULE_TYPE  = "irrigation";
-
-std::unique_ptr<ESP8266WebServer>  _server;
-std::unique_ptr<DNSServer>         _dnsServer;
-
-bool            _connect;
-const char*     _ssid               = "";
-const char*     _pass               = "";
-const char*     _apPass             = "12345678";
-char            _stationName[PARAM_LENGTH * 3 + 4];
-const char*     _cronExpression[]   = {"*","*","21","*","AUG","?"};
+const String  MODULE_TYPE       = "irrigation";
 
 #ifdef WIFI_MIN_QUALITY
 const uint8_t   _minimumQuality     = WIFI_MIN_QUALITY;
@@ -108,6 +95,15 @@ const long      _connectionTimeout  = WIFI_CONN_TIMEOUT * 1000;
 #else
 const uint16_t  _connectionTimeout  = 0;
 #endif
+
+std::unique_ptr<ESP8266WebServer>  _server;
+std::unique_ptr<DNSServer>         _dnsServer;
+
+const char*     _ssid               = "";
+const char*     _pass               = "";
+const char*     _apPass             = "12345678";
+bool            _connect;
+char            _stationName[PARAM_LENGTH * 3 + 4];
 
 WiFiClient              _wifiClient;
 PubSubClient            _mqttClient(_wifiClient);
@@ -122,6 +118,8 @@ ConfigParam _moduleLocationCfg  = {Text, "moduleLocation", "Module location", ""
 ConfigParam _mqttPortCfg        = {Text, "mqttPort", "MQTT port", "", PARAM_LENGTH, ""};
 ConfigParam _mqttHostCfg        = {Text, "mqttHost", "MQTT host", "", PARAM_LENGTH, ""};
 
+char*       _cronExpression[] = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
+
 #ifdef NODEMCUV2
 
 Channel _channels[] = {
@@ -134,7 +132,7 @@ Channel _channels[] = {
 ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
 
 const uint8_t PARAMS_COUNT    = 4;
-const uint8_t CHANNELS_COUNT  = 3;
+const uint8_t CHANNELS_COUNT  = 1;
 
 #elif ESP12
 
@@ -148,7 +146,7 @@ Channel _channels[] = {
 ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
 
 const uint8_t PARAMS_COUNT    = 4;
-const uint8_t CHANNELS_COUNT  = 3;
+const uint8_t CHANNELS_COUNT  = 1;
 
 #endif
 
@@ -181,20 +179,7 @@ void setup() {
     Serial.print(".");
     delay(1000);
   }
-  time_t now = time(nullptr);
-  log("ctime", ctime(&now));
-  struct tm * ptm;
-  ptm = gmtime(&now);
-  log("tm_year", ptm->tm_year);
-  log("tm_mon", ptm->tm_mon);
-  log("tm_mday", ptm->tm_mday);
-  log("tm_hour", ptm->tm_hour);
-  log("tm_min", ptm->tm_min);
-  log("tm_sec", ptm->tm_sec);
-  log("tm_wday", ptm->tm_wday);
-  log("tm_isdst", ptm->tm_isdst);
-  log("tm_yday", ptm->tm_yday);
-
+  updateCronExpression("0","0","4","*","*","?");
   // pins settings
   // for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
     // pinMode(_channels[i].valvePin, OUTPUT);
@@ -220,7 +205,6 @@ void setup() {
 
 void loop() {
   _httpServer.handleClient();
-  // processPhysicalInput();
   if (timeToCheckTimer()) {
     if (timeToIrrigate()) {
       startIrrigation();
@@ -230,6 +214,20 @@ void loop() {
     connectBroker();
   }
   _mqttClient.loop();
+}
+
+void updateCronExpression (const char* sec, const char* min, const char* hour, const char* dom, const char* mon, const char* dow) {
+  updateCronExpressionChunk(sec, 0);
+  updateCronExpressionChunk(min, 1);
+  updateCronExpressionChunk(hour, 2);
+  updateCronExpressionChunk(dom, 3);
+  updateCronExpressionChunk(mon, 4);
+  updateCronExpressionChunk(dow, 5);
+}
+
+void updateCronExpressionChunk(const char* a, uint8_t index) {
+  // String(a).toCharArray(_cronExpression[index], strlen(a));
+  String(a).toCharArray(_cronExpression[index], 4);
 }
 
 bool timeToCheckTimer () {
@@ -336,6 +334,8 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
   }
   if (String(topic).equals(getStationTopic("hrst"))) {
     hardReset();
+  } else if (String(topic).equals(getStationTopic("updateCron"))) {
+    updateCron(payload, length);
   } else {
     log(F("Unknown topic"));
   }
@@ -347,6 +347,34 @@ void hardReset () {
   WiFi.disconnect();
   delay(200);
   ESP.restart();
+}
+
+void updateCron(unsigned char* payload, unsigned int length) {
+  log(F("Updating cron regex"));
+  if (length < 11) {
+    log("Invalid payload");
+  } else {
+    unsigned int i = 0;
+    size_t k = 0;
+    while (i < length && k < 6) {
+      if (payload[i] == ' ') {
+        ++i;
+      } else {
+        char aux[] = {'\0','\0','\0','\0'};
+        int j = 0;
+        while (i < length && payload[i] != ' ' && j < 3) {
+          aux[j++] = payload[i++];
+        }
+        updateCronExpressionChunk(aux, k++);
+      }
+    }
+  }
+  Serial.print("New cron expression: ");
+  for (int i = 0; i < 6; ++i) {
+    Serial.print(_cronExpression[i]);
+    Serial.print(" ");
+  }
+  Serial.println();
 }
 
 void publishState (Channel *c) {
@@ -373,24 +401,6 @@ void processCommand (Channel *c, unsigned char* payload, unsigned int length) {
   } 
   publishState(c);
 }
-
-// void processPhysicalInput() {
-//   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-//     if (isChannelEnabled(&_channels[i])) {
-//       processChannelInput(&_channels[i]);
-//     }
-//   }
-// }
-
-// void processChannelInput(Channel *c) {
-//   int read = digitalRead(c->soilSensorPin);
-//   if (read != c->soilSensorLastValue) {
-//     log(F("Phisical switch state has changed. Updating module"), c->name);
-//     c->soilSensorLastValue = read;
-//     flipvalveState(c);
-//     publishState(c);
-//   }
-// }
 
 bool isChannelEnabled (Channel *c) {
   return c->name != NULL && strlen(c->name) > 0;
@@ -460,28 +470,6 @@ bool isIp(String str) {
     }
   }
   return true;
-}
-
-/** IP to String? */
-String toStringIp(IPAddress ip) {
-  String res = "";
-  for (int i = 0; i < 3; i++) {
-    res += String((ip >> (8 * i)) & 0xFF) + ".";
-  }
-  res += String(((ip >> 8 * 3)) & 0xFF);
-  return res;
-}
-
-int getRSSIasQuality(int RSSI) {
-  int quality = 0;
-  if (RSSI <= -100) {
-      quality = 0;
-  } else if (RSSI >= -50) {
-      quality = 100;
-  } else {
-      quality = 2 * (RSSI + 100);
-  }
-  return quality;
 }
 
 void subscribeTopic(const char *t) {
@@ -824,4 +812,26 @@ bool captivePortal() {
     return true;
   }
   return false;
+}
+
+/** IP to String? */
+String toStringIp(IPAddress ip) {
+  String res = "";
+  for (int i = 0; i < 3; i++) {
+    res += String((ip >> (8 * i)) & 0xFF) + ".";
+  }
+  res += String(((ip >> 8 * 3)) & 0xFF);
+  return res;
+}
+
+int getRSSIasQuality(int RSSI) {
+  int quality = 0;
+  if (RSSI <= -100) {
+      quality = 0;
+  } else if (RSSI >= -50) {
+      quality = 100;
+  } else {
+      quality = 2 * (RSSI + 100);
+  }
+  return quality;
 }

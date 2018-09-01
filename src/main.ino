@@ -129,8 +129,8 @@ uint8_t     _currChannel      = 0;
 
 Channel _channels[] = {
   // Name, valve pin, state, irr time (minutes)
-  {"macetero", D7, STATE_OFF, 1},
-  {"huerta_vertical", D6, STATE_OFF, 1}
+  {"macetero", D1, STATE_OFF, 1},
+  {"huerta_vertical", D2, STATE_OFF, 1}
 };
 
 ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
@@ -188,6 +188,7 @@ void setup() {
   // pins settings
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
     pinMode(_channels[i].valvePin, OUTPUT);
+    digitalWrite(_channels[i].valvePin, HIGH);
     // pinMode(_channels[i].soilSensorPin, INPUT);
     // digitalWrite(_channels[i].soilSensorPin, HIGH);
   }
@@ -238,7 +239,7 @@ void checkIrrigation() {
       } else {
         if (_channels[_currChannel].state == STATE_OFF) {
           log("Starting channel", _channels[_currChannel].name);
-          log("Channel irrigation duration", _channels[_currChannel].irrigationDuration);
+          log("Channel irrigation duration (minutes)", _channels[_currChannel].irrigationDuration / MILLIS_IN_MINUTE);
           openValve(&_channels[_currChannel]);
           _channels[_currChannel].irrigationStopTime = millis() + _channels[_currChannel].irrigationDuration;
         } else {

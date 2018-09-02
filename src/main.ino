@@ -72,7 +72,7 @@ struct Channel {
     enabled = true;
   }
 
-  void updateIttigationDuration (uint8_t _irrDur) {
+  void setDurationMinutes (uint8_t _irrDur) {
     irrigationDuration = _irrDur * MILLIS_IN_MINUTE;
   }
 
@@ -181,12 +181,10 @@ void setup() {
   loadChannelsSettings();
   log(F("Connected to wifi network. Local IP"), WiFi.localIP());
   configTime(TIMEZONE * 3600, 0, "br.pool.ntp.org ", "cl.pool.ntp.org", "co.pool.ntp.org"); // brazil, chile, colombia
-  log("Waiting for time");
+  log("Waiting for time...");
   while (!time(nullptr)) {
     Serial.print(".");
-    delay(500);
   }
-  Serial.println();
   // Default cron every day at 4:00 AM
   updateCronExpression("0","0","4","*","*","?");
   // pins settings
@@ -208,7 +206,7 @@ void setup() {
   MDNS.addService("http", "tcp", 80);
   _httpUpdater.setup(&_httpServer);
   _httpServer.begin();
-  log("HTTPUpdateServer ready."); 
+  log(F("HTTPUpdateServer ready.")); 
   log("Open http://" + String(getStationName()) + ".local/update");
   log("Open http://" + WiFi.localIP().toString() + "/update");
 }
@@ -220,37 +218,37 @@ void loop() {
   }
   checkIrrigation();
   _mqttClient.loop();
-  delay(1000);
+  delay(LOOP_DELAY);
 }
 
 void checkIrrigation() {
   if (!_irrigating) {
     if (isTimeToCheckSchedule()) {
       if (isTimeToIrrigate()) {
-        log("Irrigation sequence started");
+        log(F("Irrigation sequence started"));
         _irrigating = true;
         _currChannel = 0;
       }
     }
   } else {
     if (_currChannel >= CHANNELS_COUNT) {
-      log("No more channels to process. Stop irrigation sequence.");
+      log(F("No more channels to process. Stop irrigation sequence."));
       _irrigating = false;
     } else {
       if (!isChannelEnabled(&_channels[_currChannel])) {
-        log("Channel is disabled, going to next one.");
+        log(F("Channel is disabled, going to next one."));
         ++_currChannel;
       } else {
         if (_channels[_currChannel].state == STATE_OFF) {
-          log("Starting channel", _channels[_currChannel].name);
-          log("Channel irrigation duration (minutes)", _channels[_currChannel].irrigationDuration / MILLIS_IN_MINUTE);
+          log(F("Starting channel"), _channels[_currChannel].name);
+          log(F("Channel irrigation duration (minutes)"), _channels[_currChannel].irrigationDuration / MILLIS_IN_MINUTE);
           openValve(&_channels[_currChannel]);
           _channels[_currChannel].irrigationStopTime = millis() + _channels[_currChannel].irrigationDuration;
         } else {
            if (millis() > _channels[_currChannel].irrigationStopTime) {
-            log("Stoping channel", _channels[_currChannel].name);
+            log(F("Stoping channel"), _channels[_currChannel].name);
             closeValve(&_channels[_currChannel++]);
-            delay(500);
+            delay(CLOSE_VALVE_DELAY);
           }
         }
       }
@@ -278,10 +276,9 @@ bool isTimeToCheckSchedule () {
 }
 
 bool isTimeToIrrigate () {
-  log("Checking if is time to start irrigation");
+  log(F("Checking if is time to start irrigation"));
   time_t now = time(nullptr);
-  Serial.print("Current time ");
-  Serial.print(ctime(&now));
+  Serial.printf("Current time: %s", ctime(&now));
   struct tm * ptm;
   ptm = gmtime(&now);
   String dow = ptm->tm_wday < 7 ? String(DAYS_OF_WEEK[ptm->tm_wday]): "";
@@ -297,9 +294,9 @@ bool isTimeToIrrigate () {
 }
 
 void openValve(Channel* c) {
-  log("Opening valve of channel", c->name);
+  log(F("Opening valve of channel"), c->name);
   if (c->state == STATE_ON) {
-    log("Valve already opened, skipping");
+    log(F("Valve already opened, skipping"));
   } else {
     digitalWrite(c->valvePin, LOW);
     c->state = STATE_ON;
@@ -307,9 +304,9 @@ void openValve(Channel* c) {
 }
 
 void closeValve(Channel* c) {
-  log("Closing valve of channel", c->name);
+  log(F("Closing valve of channel"), c->name);
   if (c->state == STATE_OFF) {
-    log("Valve already closed, skipping");
+    log(F("Valve already closed, skipping"));
   } else {
     digitalWrite(c->valvePin, HIGH);
     c->state = STATE_OFF;
@@ -357,9 +354,9 @@ bool loadChannelsSettings () {
         _channels[i].irrigationDuration = json[String(_channels[i].id) + "_irrdur"];
         _channels[i].enabled = json[String(_channels[i].id) + "_enabled"];
         #ifdef LOGGING
-        log("Channel id", _channels[i].id);
-        log("Channel name", _channels[i].name);
-        log("Channel enabled", _channels[i].enabled);
+        log(F("Channel id"), _channels[i].id);
+        log(F("Channel name"), _channels[i].name);
+        log(F("Channel enabled"), _channels[i].enabled);
         #endif
       }
       return true;
@@ -390,7 +387,7 @@ size_t getFileSize (const char* fileName) {
         return s;
       } else {
         file.close();
-        log(F("File found but could not be opened"), fileName);
+        log(F("Cant open file"), fileName);
       }
     } else {
       log(F("File not found"), fileName);
@@ -409,19 +406,19 @@ void loadFile (const char* fileName, char buff[], size_t size) {
 
 /** callback notifying the need to save config */
 void saveConfig () {
-  File configFile = SPIFFS.open(CONFIG_FILE, "w");
-  if (configFile) {
+  File file = SPIFFS.open(CONFIG_FILE, "w");
+  if (file) {
     DynamicJsonBuffer jsonBuffer;
     JsonObject& json = jsonBuffer.createObject();
     //TODO Trim param values
     for (uint8_t i = 0; i < PARAMS_COUNT; ++i) {
       json[_configParams[i].name] = _configParams[i].value;
     }
-    json.printTo(configFile);
-    log("Configuration file saved");
+    json.printTo(file);
+    log(F("Configuration file saved"));
     json.printTo(Serial);
     Serial.println();
-    configFile.close();
+    file.close();
   } else {
     log(F("Failed to open config file for writing"));
   }
@@ -439,10 +436,16 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
     for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
       if (getChannelTopic(&_channels[i], "enable").equals(topic)) {
         enableChannel(&_channels[i]);
+        saveChannelsSettings();
       } else if (getChannelTopic(&_channels[i], "disable").equals(topic)) {
         disableChannel(&_channels[i]);
+        saveChannelsSettings();
       } else if (getChannelTopic(&_channels[i], "irrdur").equals(topic)) {
-        updateIrrigationDuration(&_channels[i], payload, length);
+        updateChannelIrrigationDuration(&_channels[i], payload, length);
+        saveChannelsSettings();
+      } else if (getChannelTopic(&_channels[i], "rename").equals(topic)) {
+        renameChannel(&_channels[i], payload, length);
+        saveChannelsSettings();
       }
     }
   }
@@ -456,10 +459,10 @@ void disableChannel(Channel* c) {
   c->enabled = false;
 }
 
-void updateIrrigationDuration(Channel* c, unsigned char* payload, unsigned int length) {
-  log("Updating irrigation duration");
+void renameChannel(Channel* c, unsigned char* payload, unsigned int length) {
+  log(F("Updating channel name"), c->name);
   if (length < 1) {
-    log("Invalid payload");
+    log(F("Invalid payload"));
     return;
   }
   char buff[length + 1];
@@ -467,9 +470,45 @@ void updateIrrigationDuration(Channel* c, unsigned char* payload, unsigned int l
     buff[i] = payload[i];
   }
   buff[length] = '\0';
-  log("New duration for channel", c->name);
-  log("Duration", String(buff));
-  c->updateIttigationDuration(String(buff).toInt());
+  log(F("Channel renamed"), buff);
+  c->updateName(buff);
+}
+
+void updateChannelIrrigationDuration(Channel* c, unsigned char* payload, unsigned int length) {
+  log(F("Updating irrigation duration for channel"), c->name);
+  if (length < 1) {
+    log(F("Invalid payload"));
+    return;
+  }
+  char buff[length + 1];
+  for (uint16_t i = 0 ; i < length; ++ i) {
+    buff[i] = payload[i];
+  }
+  buff[length] = '\0';
+  log(F("New duration for channel"), c->name);
+  log(F("Duration"), String(buff));
+  c->setDurationMinutes(String(buff).toInt());
+}
+
+void saveChannelsSettings () {
+  File file = SPIFFS.open(SETTINGS_FILE, "w");
+  if (file) {
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json = jsonBuffer.createObject();
+    //TODO Trim param values
+    for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
+      json[String(_channels[i].id) + "_name"] = _channels[i].name;
+      json[String(_channels[i].id) + "_irrdur"] = _channels[i].irrigationDuration;
+      json[String(_channels[i].id) + "_enabled"] = _channels[i].enabled;
+    }
+    json.printTo(file);
+    log(F("Configuration file saved"));
+    json.printTo(Serial);
+    Serial.println();
+    file.close();
+  } else {
+    log(F("Failed to open config file for writing"));
+  }
 }
 
 void hardReset () {
@@ -481,9 +520,9 @@ void hardReset () {
 }
 
 void updateCron(unsigned char* payload, unsigned int length) {
-  log(F("Updating cron regex"));
+  log(F("Updating cron"));
   if (length < 11) {
-    log("Invalid payload");
+    log(F("Invalid payload"));
   } else {
     unsigned int i = 0;
     size_t k = 0;

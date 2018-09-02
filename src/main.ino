@@ -54,24 +54,26 @@ struct ConfigParam {
 };
 
 struct Channel {
-  char*         name;
+  const char*   id;
+  char*         name; // configurable over mqtt
   uint8_t       valvePin;
   char          state;
-  long          irrigationDuration; // millis
+  long          irrigationDuration; // millis configurable over mqtt
   long          irrigationStopTime; // millis
-  bool          enabled;
+  bool          enabled; // configurable over mqtt
 
-  Channel(const char* _name, uint8_t _vp, uint8_t _vs, uint8_t _id) {
+  Channel(const char* _id, const char* _name, uint8_t _vp, uint8_t _vs, uint8_t _irrDur) {
+    id = _id;
     name = new char[CHANNEL_NAME_LENGTH + 1];
     updateName(_name);
     valvePin = _vp;
     state = _vs;
-    irrigationDuration = _id * MILLIS_IN_MINUTE;
+    irrigationDuration = _irrDur * MILLIS_IN_MINUTE;
     enabled = true;
   }
 
-  void updateIttigationDuration (uint8_t _id) {
-    irrigationDuration = _id * MILLIS_IN_MINUTE;
+  void updateIttigationDuration (uint8_t _irrDur) {
+    irrigationDuration = _irrDur * MILLIS_IN_MINUTE;
   }
 
   void updateName (const char *v) {
@@ -129,8 +131,8 @@ uint8_t     _currChannel      = 0;
 
 Channel _channels[] = {
   // Name, valve pin, state, irr time (minutes)
-  {"macetero", D1, STATE_OFF, 1},
-  {"huerta_vertical", D2, STATE_OFF, 1}
+  {"A","macetero", D1, STATE_OFF, 1},
+  {"B", "huerta_vertical", D2, STATE_OFF, 1}
 };
 
 ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
@@ -139,6 +141,7 @@ const uint8_t PARAMS_COUNT    = 4;
 const uint8_t CHANNELS_COUNT  = 2;
 
 #elif ESP12
+
 
 Channel _channels[] = {
   // Name, valve pin, state, irr time (minutes)
@@ -175,6 +178,7 @@ void setup() {
   Serial.println();
   log("Starting module");
   connectWifiNetwork(loadConfig());
+  loadChannelsSettings();
   log(F("Connected to wifi network. Local IP"), WiFi.localIP());
   configTime(TIMEZONE * 3600, 0, "br.pool.ntp.org ", "cl.pool.ntp.org", "co.pool.ntp.org"); // brazil, chile, colombia
   log("Waiting for time");
@@ -312,48 +316,95 @@ void closeValve(Channel* c) {
   }
 }
 
-bool loadConfig() { 
-  //read configuration from FS json
-  if (SPIFFS.begin()) {
-    if (SPIFFS.exists(CONFIG_FILE)) {
-      //file exists, reading and loading
-      File configFile = SPIFFS.open(CONFIG_FILE, "r");
-      if (configFile) {
-        size_t size = configFile.size();
-        if (size > 0) {
-          // Allocate a buffer to store contents of the file.
-          char buf[size];
-          configFile.readBytes(buf, size);
-          DynamicJsonBuffer jsonBuffer;
-          JsonObject& json = jsonBuffer.parseObject(buf);
-          log("Configuration file loaded");
-          #ifdef LOGGING
-          json.printTo(Serial);
-          Serial.println();
-          #endif
-          if (json.success()) {
-            for (uint8_t i = 0; i < PARAMS_COUNT; ++i) {
-              _configParams[i].updateValue(json[_configParams[i].name]);
-              log(_configParams[i].name, _configParams[i].value);
-            }
-            return true;
-          } else {
-            log(F("Failed to load json config"));
-          }
-        } else {
-          log(F("Config file empty"));
-        }
-      } else {
-        log(F("Config file found but could not be opened"));
+bool loadConfig () {
+  size_t size = getFileSize(CONFIG_FILE);
+  if (size > 0) {
+    char buff[size];
+    loadFile(CONFIG_FILE, buff, size);
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json = jsonBuffer.parseObject(buff);
+    if (json.success()) {
+      #ifdef LOGGING
+      json.printTo(Serial);
+      Serial.println();
+      #endif
+      for (uint8_t i = 0; i < PARAMS_COUNT; ++i) {
+        _configParams[i].updateValue(json[_configParams[i].name]);
+        log(_configParams[i].name, _configParams[i].value);
       }
-      configFile.close();
+      return true;
     } else {
-      log(F("No config file found"));
+      log(F("Failed to load json config"));
+    }
+  }
+  return false;
+}
+
+bool loadChannelsSettings () {
+  size_t size = getFileSize(SETTINGS_FILE);
+  if (size > 0) {
+    char buff[size];
+    loadFile(SETTINGS_FILE, buff, size);
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json = jsonBuffer.parseObject(buff);
+    #ifdef LOGGING
+    json.printTo(Serial);
+    Serial.println();
+    #endif
+    if (json.success()) {
+      for (uint8_t i = 0; i < CHANNELS_COUNT; ++i) {
+        _channels[i].updateName(json[String(_channels[i].id) + "_name"]);
+        _channels[i].irrigationDuration = json[String(_channels[i].id) + "_irrdur"];
+        _channels[i].enabled = json[String(_channels[i].id) + "_enabled"];
+        #ifdef LOGGING
+        log("Channel id", _channels[i].id);
+        log("Channel name", _channels[i].name);
+        log("Channel enabled", _channels[i].enabled);
+        #endif
+      }
+      return true;
+    } else {
+      log(F("Failed to load json"));
+    }
+  }
+  return false;
+}
+
+/*
+  Returns the size of a file. 
+  If 
+    > the file does not exist
+    > the FS cannot be mounted
+    > the file cannot be opened for writing
+    > the file is empty
+  the value returned is 0.
+  Otherwise the size of the file is returned.
+*/
+size_t getFileSize (const char* fileName) {
+  if (SPIFFS.begin()) {
+    if (SPIFFS.exists(fileName)) {
+      File file = SPIFFS.open(fileName, "r");
+      if (file) {
+        size_t s = file.size();
+        file.close();
+        return s;
+      } else {
+        file.close();
+        log(F("File found but could not be opened"), fileName);
+      }
+    } else {
+      log(F("File not found"), fileName);
     }
   } else {
     log(F("Failed to mount FS"));
   }
-  return false;
+  return 0;
+}
+
+void loadFile (const char* fileName, char buff[], size_t size) {
+  File file = SPIFFS.open(fileName, "r");
+  file.readBytes(buff, size);
+  file.close();
 }
 
 /** callback notifying the need to save config */

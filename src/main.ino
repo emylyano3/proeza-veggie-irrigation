@@ -183,7 +183,7 @@ void setup() {
   configTime(TIMEZONE * 3600, 0, "br.pool.ntp.org ", "cl.pool.ntp.org", "co.pool.ntp.org"); // brazil, chile, colombia
   log("Waiting for time...");
   while (!time(nullptr)) {
-    Serial.print(".");
+    delay(500);
   }
   // Default cron every day at 4:00 AM
   updateCronExpression("0","0","4","*","*","?");
@@ -471,7 +471,9 @@ void renameChannel(Channel* c, unsigned char* payload, unsigned int length) {
   }
   buff[length] = '\0';
   log(F("Channel renamed"), buff);
+  _mqttClient.unsubscribe(getChannelTopic(c, "+").c_str());
   c->updateName(buff);
+  _mqttClient.subscribe(getChannelTopic(c, "+").c_str());
 }
 
 void updateChannelIrrigationDuration(Channel* c, unsigned char* payload, unsigned int length) {
@@ -563,10 +565,10 @@ void connectBroker() {
     log(F("Connecting MQTT broker as"), getStationName());
     if (_mqttClient.connect(getStationName())) {
       log(F("MQTT broker Connected"));
-      subscribeTopic(getStationTopic("+").c_str());
+      _mqttClient.subscribe(getStationTopic("+").c_str());
       for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
         if (isChannelEnabled(&_channels[i])) {
-          subscribeTopic(getChannelTopic(&_channels[i], "#").c_str());
+          _mqttClient.subscribe(getChannelTopic(&_channels[i], "+").c_str());
         }
       }
     } else {
@@ -587,11 +589,6 @@ char* getStationName () {
     sn.toCharArray(_stationName, size);
   } 
   return _stationName;
-}
-
-void subscribeTopic(const char *t) {
-  log("Subscribing mqtt topic", t);
-  _mqttClient.subscribe(t);
 }
 
 String getChannelTopic (Channel *c, String cmd) {

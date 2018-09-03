@@ -131,8 +131,8 @@ uint8_t     _currChannel      = 0;
 
 Channel _channels[] = {
   // Name, valve pin, state, irr time (minutes)
-  {"A","macetero", D1, STATE_OFF, 1},
-  {"B", "huerta_vertical", D2, STATE_OFF, 1}
+  {"A", "channel_A", D1, STATE_OFF, 1},
+  {"B", "channel_B", D2, STATE_OFF, 1}
 };
 
 ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
@@ -180,7 +180,7 @@ void setup() {
   connectWifiNetwork(loadConfig());
   loadChannelsSettings();
   log(F("Connected to wifi network. Local IP"), WiFi.localIP());
-  configTime(TIMEZONE * 3600, 0, "br.pool.ntp.org ", "cl.pool.ntp.org", "co.pool.ntp.org"); // brazil, chile, colombia
+  configTime(TIMEZONE * 3600, 0, "br.pool.ntp.org", "cl.pool.ntp.org", "co.pool.ntp.org"); // brazil, chile, colombia
   log("Waiting for time...");
   while (!time(nullptr)) {
     delay(500);

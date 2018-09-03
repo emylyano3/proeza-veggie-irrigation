@@ -431,6 +431,8 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
     hardReset();
   } else if (String(topic).equals(getStationTopic("updateCron"))) {
     updateCron(payload, length);
+  } else if (String(topic).equals(getStationTopic("state"))) {
+    changeState(payload, length);
   } else {
     // Channels topics
     for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
@@ -549,6 +551,34 @@ void updateCron(unsigned char* payload, unsigned int length) {
   }
   Serial.println();
   #endif
+}
+
+void changeState(unsigned char* payload, unsigned int length) {
+  if (length != 1) {
+    log(F("Invalid payload"));
+  } else {
+    switch (payload[0]) {
+      case STATE_OFF:
+        if (_irrigating) {
+          // Set irrigation end to 0 to simulate it should have ended 
+          _channels[_currChannel].irrigationStopTime = 0;
+          closeValve(&_channels[_currChannel]);
+          _irrigating = false;
+          log(F("Irrigation stopped"));
+        }
+        return;
+      case STATE_ON:
+        if (!_irrigating) {
+          _irrigating = true;
+          _currChannel = 0;
+          log(F("Irrigation started"));
+        }
+        return;
+
+      default:
+        log(F("Invalid state"), payload[0]);
+    } 
+  }
 }
 
 void publishState (Channel *c) {

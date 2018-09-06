@@ -232,12 +232,14 @@ void checkIrrigation() {
         log(F("Irrigation sequence started"));
         _irrigating = true;
         _currChannel = 0;
+        _mqttClient.publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
       }
     }
   } else {
     if (_currChannel >= CHANNELS_COUNT) {
-      log(F("No more channels to process. Stop irrigation sequence."));
+      log(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
+      _mqttClient.publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
     } else {
       if (!isChannelEnabled(&_channels[_currChannel])) {
         log(F("Channel is disabled, going to next one."));
@@ -435,14 +437,17 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
     hardReset();
   } else if (String(topic).equals(getStationTopic("cron"))) {
     updateCron(payload, length);
-  } else if (String(topic).equals(getStationTopic("state"))) {
-    changeState(payload, length);
+  } else if (String(topic).equals(getStationTopic("control"))) {
+    if (changeState(payload, length)) {
+      _mqttClient.publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
+    }
   } else {
     // Channels topics
     for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
       if (getChannelTopic(&_channels[i], "enable").equals(topic)) {
         if (enableChannel(&_channels[i], payload, length)) {
           saveChannelsSettings();
+          _mqttClient.publish(getChannelTopic(&_channels[i], "state").c_str(), _channels[i].enabled ? "1" : "0");
         }
       } else if (getChannelTopic(&_channels[i], "irrdur").equals(topic)) {
         if (updateChannelIrrigationDuration(&_channels[i], payload, length)) {
@@ -477,7 +482,6 @@ bool enableChannel(Channel* c, unsigned char* payload, unsigned int length) {
       log(F("Invalid state"), payload[0]);
       break;
   }
-  _mqttClient.publish(getChannelTopic(c, "state").c_str(), c->enabled ? "1" : "0");
   return stateChanged;
 }
 
@@ -580,7 +584,7 @@ void updateCron(unsigned char* payload, unsigned int length) {
   #endif
 }
 
-void changeState(unsigned char* payload, unsigned int length) {
+bool changeState(unsigned char* payload, unsigned int length) {
   if (length != 1) {
     log(F("Invalid payload"));
   } else {
@@ -593,19 +597,19 @@ void changeState(unsigned char* payload, unsigned int length) {
           _irrigating = false;
           log(F("Irrigation stopped"));
         }
-        return;
+        return true;
       case STATE_ON:
         if (!_irrigating) {
           _irrigating = true;
           _currChannel = 0;
           log(F("Irrigation started"));
         }
-        return;
-
+        return true;
       default:
         log(F("Invalid state"), payload[0]);
-    } 
+    }
   }
+  return false;
 }
 
 bool isChannelEnabled (Channel *c) {

@@ -75,6 +75,10 @@ struct Channel {
   void setDurationMinutes (uint8_t _irrDur) {
     irrigationDuration = _irrDur * MILLIS_IN_MINUTE;
   }
+  
+  int getDurationMinutes () {
+    return irrigationDuration / MILLIS_IN_MINUTE;
+  }
 
   void updateName (const char *v) {
     String s = String(v);
@@ -429,7 +433,7 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
   // Station topics
   if (String(topic).equals(getStationTopic("hrst"))) {
     hardReset();
-  } else if (String(topic).equals(getStationTopic("updateCron"))) {
+  } else if (String(topic).equals(getStationTopic("cron"))) {
     updateCron(payload, length);
   } else if (String(topic).equals(getStationTopic("state"))) {
     changeState(payload, length);
@@ -437,52 +441,72 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
     // Channels topics
     for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
       if (getChannelTopic(&_channels[i], "enable").equals(topic)) {
-        enableChannel(&_channels[i]);
-        saveChannelsSettings();
-      } else if (getChannelTopic(&_channels[i], "disable").equals(topic)) {
-        disableChannel(&_channels[i]);
-        saveChannelsSettings();
+        if (enableChannel(&_channels[i], payload, length)) {
+          saveChannelsSettings();
+        }
       } else if (getChannelTopic(&_channels[i], "irrdur").equals(topic)) {
-        updateChannelIrrigationDuration(&_channels[i], payload, length);
-        saveChannelsSettings();
+        if (updateChannelIrrigationDuration(&_channels[i], payload, length)) {
+          saveChannelsSettings();
+        }
       } else if (getChannelTopic(&_channels[i], "rename").equals(topic)) {
-        renameChannel(&_channels[i], payload, length);
-        saveChannelsSettings();
+        if (renameChannel(&_channels[i], payload, length)) {
+          saveChannelsSettings();
+        }
       }
     }
   }
 }
 
-void enableChannel(Channel* c) {
-  c->enabled = true;
+bool enableChannel(Channel* c, unsigned char* payload, unsigned int length) {
+  log(F("Changing channel state"), c->name);
+  if (length != 1 || !payload) {
+    log(F("Invalid payload. Ignoring."));
+    return false;
+  }
+  bool stateChanged = false;
+  switch (payload[0]) {
+    case STATE_OFF:
+      stateChanged = c->enabled;
+      c->enabled = false;
+      break;
+    case STATE_ON:
+      stateChanged = !c->enabled;
+      c->enabled = true;
+      break;
+    default:
+      log(F("Invalid state"), payload[0]);
+      break;
+  }
+  _mqttClient.publish(getChannelTopic(c, "state").c_str(), c->enabled ? "1" : "0");
+  return stateChanged;
 }
 
-void disableChannel(Channel* c) {
-  c->enabled = false;
-}
-
-void renameChannel(Channel* c, unsigned char* payload, unsigned int length) {
+bool renameChannel(Channel* c, unsigned char* payload, unsigned int length) {
   log(F("Updating channel name"), c->name);
   if (length < 1) {
     log(F("Invalid payload"));
-    return;
+    return false;
   }
-  char buff[length + 1];
+  char newName[length + 1];
   for (uint16_t i = 0 ; i < length; ++ i) {
-    buff[i] = payload[i];
+    newName[i] = payload[i];
   }
-  buff[length] = '\0';
-  log(F("Channel renamed"), buff);
-  _mqttClient.unsubscribe(getChannelTopic(c, "+").c_str());
-  c->updateName(buff);
-  _mqttClient.subscribe(getChannelTopic(c, "+").c_str());
+  newName[length] = '\0';
+  bool renamed = !String(c->name).equals(String(newName));
+  if (renamed) {
+    log(F("Channel renamed"), newName);
+    _mqttClient.unsubscribe(getChannelTopic(c, "+").c_str());
+    c->updateName(newName);
+    _mqttClient.subscribe(getChannelTopic(c, "+").c_str());
+  }
+  return renamed;
 }
 
-void updateChannelIrrigationDuration(Channel* c, unsigned char* payload, unsigned int length) {
+bool updateChannelIrrigationDuration(Channel* c, unsigned char* payload, unsigned int length) {
   log(F("Updating irrigation duration for channel"), c->name);
   if (length < 1) {
     log(F("Invalid payload"));
-    return;
+    return false;
   }
   char buff[length + 1];
   for (uint16_t i = 0 ; i < length; ++ i) {
@@ -490,8 +514,11 @@ void updateChannelIrrigationDuration(Channel* c, unsigned char* payload, unsigne
   }
   buff[length] = '\0';
   log(F("New duration for channel"), c->name);
-  log(F("Duration"), String(buff));
-  c->setDurationMinutes(String(buff).toInt());
+  int newDur = String(buff).toInt();
+  log(F("Duration"), newDur);
+  bool durChanged = c->getDurationMinutes() != newDur;
+  c->setDurationMinutes(newDur);
+  return durChanged;
 }
 
 void saveChannelsSettings () {
@@ -579,10 +606,6 @@ void changeState(unsigned char* payload, unsigned int length) {
         log(F("Invalid state"), payload[0]);
     } 
   }
-}
-
-void publishState (Channel *c) {
-  _mqttClient.publish(getChannelTopic(c, "state").c_str(), new char[2]{c->state, '\0'});
 }
 
 bool isChannelEnabled (Channel *c) {
@@ -775,7 +798,7 @@ void setupConfigPortal() {
   }
   // Without delay I've seen the IP address blank
   delay(500); 
-  log(F("AP IP address: "), WiFi.softAPIP());
+  log(F("AP IP address"), WiFi.softAPIP());
   /* Setup the DNS server redirecting all the domains to the apIP */
   _dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
   _dnsServer->start(DNS_PORT, "*", WiFi.softAPIP());

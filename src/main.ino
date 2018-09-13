@@ -623,9 +623,7 @@ void connectBroker() {
       log(F("MQTT broker Connected"));
       _mqttClient.subscribe(getStationTopic("+").c_str());
       for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-        // if (isChannelEnabled(&_channels[i])) {
-          _mqttClient.subscribe(getChannelTopic(&_channels[i], "+").c_str());
-        // }
+        _mqttClient.subscribe(getChannelTopic(&_channels[i], "+").c_str());
       }
     } else {
       log(F("Failed. RC:"), _mqttClient.state());

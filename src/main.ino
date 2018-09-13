@@ -438,17 +438,16 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
   } else if (String(topic).equals(getStationTopic("cron"))) {
     updateCron(payload, length);
   } else if (String(topic).equals(getStationTopic("control"))) {
-    if (changeState(payload, length)) {
-      _mqttClient.publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
-    }
+    changeState(payload, length);
+    _mqttClient.publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
   } else {
     // Channels topics
     for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
       if (getChannelTopic(&_channels[i], "enable").equals(topic)) {
         if (enableChannel(&_channels[i], payload, length)) {
           saveChannelsSettings();
-          _mqttClient.publish(getChannelTopic(&_channels[i], "state").c_str(), _channels[i].enabled ? "1" : "0");
         }
+        _mqttClient.publish(getChannelTopic(&_channels[i], "state").c_str(), _channels[i].enabled ? "1" : "0");
       } else if (getChannelTopic(&_channels[i], "irrdur").equals(topic)) {
         if (updateChannelIrrigationDuration(&_channels[i], payload, length)) {
           saveChannelsSettings();

@@ -139,6 +139,8 @@ Channel _channels[] = {
   {"B", "channel_B", D2, STATE_OFF, 1}
 };
 
+const uint8_t LED_PIN = D7;
+
 ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
 
 const uint8_t PARAMS_COUNT    = 4;
@@ -152,6 +154,8 @@ Channel _channels[] = {
   {"macetero", 13, STATE_OFF, 1},
   {"huerta_vertical", 12, STATE_OFF, 1}
 };
+
+const uint8_t LED_PIN = 5;
 
 ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
 
@@ -179,9 +183,18 @@ template <class T, class U> void log (T key, U value) {
 void setup() {
   Serial.begin(115200);
   delay(500);
+  pinMode(LED_PIN, OUTPUT);
   Serial.println();
   log("Starting module");
   connectWifiNetwork(loadConfig());
+  // pins settings
+  for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
+    pinMode(_channels[i].valvePin, OUTPUT);
+    digitalWrite(_channels[i].valvePin, HIGH);
+    // pinMode(_channels[i].soilSensorPin, INPUT);
+    // digitalWrite(_channels[i].soilSensorPin, HIGH);
+  }
+  flashLed(LED_PIN, 100, 5);
   loadChannelsSettings();
   log(F("Connected to wifi network. Local IP"), WiFi.localIP());
   configTime(TIMEZONE * 3600, 0, "br.pool.ntp.org", "cl.pool.ntp.org", "co.pool.ntp.org"); // brazil, chile, colombia
@@ -191,13 +204,6 @@ void setup() {
   }
   // Default cron every day at 4:00 AM
   updateCronExpression("0","0","4","*","*","?");
-  // pins settings
-  for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-    pinMode(_channels[i].valvePin, OUTPUT);
-    digitalWrite(_channels[i].valvePin, HIGH);
-    // pinMode(_channels[i].soilSensorPin, INPUT);
-    // digitalWrite(_channels[i].soilSensorPin, HIGH);
-  }
   log(F("Configuring MQTT broker"));
   String port = String(_mqttPortCfg.value);
   log(F("Port"), port);
@@ -223,6 +229,15 @@ void loop() {
   checkIrrigation();
   _mqttClient.loop();
   delay(LOOP_DELAY);
+}
+
+void flashLed (uint8_t pin, long _delay, uint8_t times) {
+  for (int i = 0; i < times; ++i) {
+    digitalWrite(pin, HIGH);
+    delay(_delay);
+    digitalWrite(pin, LOW);
+    delay(_delay);
+  }
 }
 
 void checkIrrigation() {
@@ -669,6 +684,9 @@ const char HTTP_SCAN_LINK[] PROGMEM                 = "<br/><div class=\"c\"><a 
 const char HTTP_SAVED[] PROGMEM                     = "<div>Credentials Saved<br/>Trying to connect ESP to network.<br/>If it fails reconnect to AP to try again</div>";
 const char HTTP_END[] PROGMEM                       = "</div></body></html>";
 
+bool lfck_isOn    = false;
+long lfck_cursor  = 0;
+
 void connectWifiNetwork (bool existsConfig) {
   log(F("Connecting to wifi network"));
   bool connected = false;
@@ -706,8 +724,13 @@ bool startConfigPortal() {
       delay(1000);
       log(F("Connecting to new AP"));
       // using user-provided  _ssid, _pass in place of system-stored ssid and pass
+      log("ssid", _ssid);
+      log("pass", _pass);
+      //end the led feedback
+      digitalWrite(LED_PIN, LOW);
       if (connectWifi(_ssid, _pass) != WL_CONNECTED) {
         log(F("Failed to connect."));
+        break;
       } else {
         WiFi.mode(WIFI_STA);
         //notify that configuration has changed and any optional parameters should be saved
@@ -715,11 +738,20 @@ bool startConfigPortal() {
         break;
       }
     }
+    ledFeedback(1000);
     yield();
   }
   _server.reset();
   _dnsServer.reset();
   return  WiFi.status() == WL_CONNECTED;
+}
+
+void ledFeedback(int step) {
+  if (millis() > lfck_cursor + step) {
+    lfck_isOn = !lfck_isOn;
+    lfck_cursor = millis();
+    digitalWrite(LED_PIN, lfck_isOn ? HIGH : LOW);
+  }
 }
 
 uint8_t connectWifi(String ssid, String pass) {

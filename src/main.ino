@@ -44,7 +44,9 @@ struct ConfigParam {
   }
 
   ~ConfigParam() {
-    delete[] value;
+    if (value != NULL) {
+      delete[] value;
+    }
   }
   
   void updateValue (const char *v) {
@@ -108,8 +110,6 @@ const uint16_t  _connectionTimeout  = 0;
 std::unique_ptr<ESP8266WebServer>  _server;
 std::unique_ptr<DNSServer>         _dnsServer;
 
-const char*     _ssid               = "";
-const char*     _pass               = "";
 const char*     _apPass             = "12345678";
 bool            _connect;
 char            _stationName[PARAM_LENGTH * 3 + 4];
@@ -122,14 +122,14 @@ ESP8266HTTPUpdateServer _httpUpdater;
 long                    _nextBrokerConnAtte = 0;
 long                    _lastTimerCheck     = -TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE; // TIMER_CHECK_THRESHOLD is in minutes
 
-ConfigParam _moduleNameCfg      = {Text, "moduleName", "Module name", "", PARAM_LENGTH, "required"};
-ConfigParam _moduleLocationCfg  = {Text, "moduleLocation", "Module location", "", PARAM_LENGTH, "required"};
-ConfigParam _mqttPortCfg        = {Text, "mqttPort", "MQTT port", "", PARAM_LENGTH, ""};
-ConfigParam _mqttHostCfg        = {Text, "mqttHost", "MQTT host", "", PARAM_LENGTH, ""};
-
 char*       _cronExpression[] = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
 bool        _irrigating       = false;
 uint8_t     _currChannel      = 0;
+
+const uint8_t CHANNELS_COUNT  = 2;
+const uint8_t PARAMS_COUNT    = 4;
+
+ConfigParam**   _configParams = (ConfigParam**)malloc(PARAMS_COUNT * sizeof(ConfigParam*));
 
 #ifdef NODEMCUV2
 
@@ -139,15 +139,9 @@ Channel _channels[] = {
   {"B", "channel_B", D2, STATE_OFF, 1}
 };
 
-const uint8_t LED_PIN = D7;
-
-ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
-
-const uint8_t PARAMS_COUNT    = 4;
-const uint8_t CHANNELS_COUNT  = 2;
+const uint8_t LED_PIN         = D7;
 
 #elif ESP12
-
 
 Channel _channels[] = {
   // Name, valve pin, state, irr time (minutes)
@@ -155,11 +149,7 @@ Channel _channels[] = {
   {"huerta_vertical", 12, STATE_OFF, 1}
 };
 
-const uint8_t LED_PIN = 5;
-
-ConfigParam   _configParams[] = {_moduleLocationCfg, _moduleNameCfg, _mqttHostCfg, _mqttPortCfg};
-
-const uint8_t PARAMS_COUNT    = 4;
+const uint8_t LED_PIN         = 5;
 const uint8_t CHANNELS_COUNT  = 2;
 
 #endif
@@ -180,12 +170,21 @@ template <class T, class U> void log (T key, U value) {
   #endif
 }
 
+ConfigParam _moduleNameCfg      = {Text, "moduleName", "Module name", "", PARAM_LENGTH, "required"};
+ConfigParam _moduleLocationCfg  = {Text, "moduleLocation", "Module location", "", PARAM_LENGTH, "required"};
+ConfigParam _mqttPortCfg        = {Text, "mqttPort", "MQTT port", "", PARAM_LENGTH, ""};
+ConfigParam _mqttHostCfg        = {Text, "mqttHost", "MQTT host", "", PARAM_LENGTH, ""};
+
 void setup() {
   Serial.begin(115200);
   delay(500);
   pinMode(LED_PIN, OUTPUT);
   Serial.println();
   log("Starting module");
+  _configParams[0] = &_moduleNameCfg;
+  _configParams[1] = &_moduleLocationCfg;
+  _configParams[2] = &_mqttPortCfg;
+  _configParams[3] = &_mqttHostCfg;
   connectWifiNetwork(loadConfig());
   // pins settings
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
@@ -347,8 +346,8 @@ bool loadConfig () {
       Serial.println();
       #endif
       for (uint8_t i = 0; i < PARAMS_COUNT; ++i) {
-        _configParams[i].updateValue(json[_configParams[i].name]);
-        log(_configParams[i].name, _configParams[i].value);
+        _configParams[i]->updateValue(json[_configParams[i]->name]);
+        log(_configParams[i]->name, _configParams[i]->value);
       }
       return true;
     } else {
@@ -433,7 +432,7 @@ void saveConfig () {
     JsonObject& json = jsonBuffer.createObject();
     //TODO Trim param values
     for (uint8_t i = 0; i < PARAMS_COUNT; ++i) {
-      json[_configParams[i].name] = _configParams[i].value;
+      json[_configParams[i]->name] = _configParams[i]->value;
     }
     json.printTo(file);
     log(F("Configuration file saved"));
@@ -704,12 +703,13 @@ void connectWifiNetwork (bool existsConfig) {
       connected = startConfigPortal();
     }
   }
-  // free mem used for configuration
+  log("Freeieng mem used for configuration");
   for (uint8_t i = 0; i < PARAMS_COUNT; ++i) {
-    _configParams[i].name = NULL;
-    _configParams[i].label = NULL;
-    _configParams[i].customHTML = NULL;
+    _configParams[i]->name = NULL;
+    _configParams[i]->label = NULL;
+    _configParams[i]->customHTML = NULL;
   }
+  free(_configParams);
 }
 
 bool startConfigPortal() {
@@ -724,11 +724,9 @@ bool startConfigPortal() {
       delay(1000);
       log(F("Connecting to new AP"));
       // using user-provided  _ssid, _pass in place of system-stored ssid and pass
-      log("ssid", _ssid);
-      log("pass", _pass);
       //end the led feedback
       digitalWrite(LED_PIN, LOW);
-      if (connectWifi(_ssid, _pass) != WL_CONNECTED) {
+      if (connectWifi(_server->arg("s").c_str(), _server->arg("p").c_str()) != WL_CONNECTED) {
         log(F("Failed to connect."));
         break;
       } else {
@@ -918,30 +916,30 @@ void handleWifi(bool scan) {
   char parLength[5];
   // add the extra parameters to the form
   for (int i = 0; i < PARAMS_COUNT; i++) {
-    if (_configParams[i].name != NULL) {
-      if (_configParams[i].type == Combo) {
+    if (_configParams[i]->name != NULL) {
+      if (_configParams[i]->type == Combo) {
         String pitem = FPSTR(HTTP_FORM_INPUT_LIST);
-        pitem.replace("{i}", _configParams[i].name);
-        pitem.replace("{n}", _configParams[i].name);
+        pitem.replace("{i}", _configParams[i]->name);
+        pitem.replace("{n}", _configParams[i]->name);
         String ops = "";
-        for (size_t j = 0; j < _configParams[i].options.size(); ++j) {
+        for (size_t j = 0; j < _configParams[i]->options.size(); ++j) {
           String op = FPSTR(HTTP_FORM_INPUT_LIST_OPTION);
-          op.replace("{o}", _configParams[i].options[j]);
+          op.replace("{o}", _configParams[i]->options[j]);
           ops.concat(op);
         }
-        pitem.replace("{p}", _configParams[i].label);
+        pitem.replace("{p}", _configParams[i]->label);
         pitem.replace("{o}", ops);
-        pitem.replace("{c}", _configParams[i].customHTML);
+        pitem.replace("{c}", _configParams[i]->customHTML);
         page += pitem;
       } else {
         String pitem = FPSTR(HTTP_FORM_INPUT);
-        pitem.replace("{i}", _configParams[i].name);
-        pitem.replace("{n}", _configParams[i].name);
-        pitem.replace("{p}", _configParams[i].label);
-        snprintf(parLength, 5, "%d", _configParams[i].length);
+        pitem.replace("{i}", _configParams[i]->name);
+        pitem.replace("{n}", _configParams[i]->name);
+        pitem.replace("{p}", _configParams[i]->label);
+        snprintf(parLength, 5, "%d", _configParams[i]->length);
         pitem.replace("{l}", parLength);
-        pitem.replace("{v}", _configParams[i].value);
-        pitem.replace("{c}", _configParams[i].customHTML);
+        pitem.replace("{v}", _configParams[i]->value);
+        pitem.replace("{c}", _configParams[i]->customHTML);
         page += pitem;
       }
     } 
@@ -979,15 +977,9 @@ void handleNotFound() {
 
 /** Handle the WLAN save form and redirect to WLAN config page again */
 void handleWifiSave() {
-  _ssid = _server->arg("s").c_str();
-  _pass = _server->arg("p").c_str();
-  //parameters
   for (int i = 0; i < PARAMS_COUNT; i++) {
-    //read parameter
-    String value = _server->arg(_configParams[i].name);
-    //store it in array
-    value.toCharArray(_configParams[i].value, _configParams[i].length);
-    log(_configParams[i].name, value);
+    _configParams[i]->updateValue(_server->arg(_configParams[i]->name).c_str());
+    log(_configParams[i]->name, _configParams[i]->value);
   }
   String page = FPSTR(HTTP_HEAD);
   page.replace("{v}", "Credentials Saved");

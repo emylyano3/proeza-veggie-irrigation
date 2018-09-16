@@ -13,6 +13,8 @@ extern "C" {
   #include "user_interface.h"
 }
 
+const char    STATE_OFF         = '0';
+const char    STATE_ON          = '1';
 const char*   CONFIG_FILE       = "/config.json";
 const char*   SETTINGS_FILE     = "/settings.json";
 const char*   DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
@@ -26,8 +28,8 @@ struct ConfigParam {
   const char*         label;      // legible por usuario
   char*               value;      // valor default
   uint8_t             length;     // longitud limite
-  InputType           type;       // tipo de control en formularion
   const char*         customHTML; // html custom
+  InputType           type;       // tipo de control en formularion
   std::vector<char*>  options;    // optciones para el combo
 
   ConfigParam() {
@@ -88,12 +90,20 @@ struct Channel {
   }
 };
 
-/* Possible switch states */
-const char    STATE_OFF         = '0';
-const char    STATE_ON          = '1';
-
 /* Module settings */
-const String  MODULE_TYPE       = "irrigation";
+const String  MODULE_TYPE           = "irrigation";
+char          _stationName[PARAM_LENGTH * 3 + 4];
+
+std::unique_ptr<ESP8266WebServer> _server;
+std::unique_ptr<DNSServer>        _dnsServer;
+WiFiClient                        _wifiClient;
+PubSubClient                      _mqttClient(_wifiClient);
+ESP8266WebServer                  _httpServer(80);
+ESP8266HTTPUpdateServer           _httpUpdater;
+
+/* Wifi configuration control */
+const char*     _apPass             = "12345678";
+bool            _connect;
 
 #ifdef WIFI_MIN_QUALITY
 const uint8_t   _minimumQuality     = WIFI_MIN_QUALITY;
@@ -107,51 +117,43 @@ const long      _connectionTimeout  = WIFI_CONN_TIMEOUT * 1000;
 const uint16_t  _connectionTimeout  = 0;
 #endif
 
-std::unique_ptr<ESP8266WebServer>  _server;
-std::unique_ptr<DNSServer>         _dnsServer;
+/* MQTT broker connection control */
+long            _nextBrokerConnAtte = 0;
+long            _lastTimerCheck     = -TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE; // TIMER_CHECK_THRESHOLD is in minutes
 
-const char*     _apPass             = "12345678";
-bool            _connect;
-char            _stationName[PARAM_LENGTH * 3 + 4];
+/* Irrigation control */
+char*           _cronExpression[] = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
+bool            _irrigating       = false;
+uint8_t         _currChannel      = 0;
 
-WiFiClient              _wifiClient;
-PubSubClient            _mqttClient(_wifiClient);
-ESP8266WebServer        _httpServer(80);
-ESP8266HTTPUpdateServer _httpUpdater;
+/* Configuration control */
+const uint8_t   PARAMS_COUNT    = 4;
+ConfigParam**   _configParams   = (ConfigParam**)malloc(PARAMS_COUNT * sizeof(ConfigParam*));
 
-long                    _nextBrokerConnAtte = 0;
-long                    _lastTimerCheck     = -TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE; // TIMER_CHECK_THRESHOLD is in minutes
-
-char*       _cronExpression[] = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
-bool        _irrigating       = false;
-uint8_t     _currChannel      = 0;
-
-const uint8_t CHANNELS_COUNT  = 2;
-const uint8_t PARAMS_COUNT    = 4;
-
-ConfigParam**   _configParams = (ConfigParam**)malloc(PARAMS_COUNT * sizeof(ConfigParam*));
+/* Channels control */
+const uint8_t CHANNELS_COUNT  = 4;
 
 #ifdef NODEMCUV2
-
 Channel _channels[] = {
   // Name, valve pin, state, irr time (minutes)
   {"A", "channel_A", D1, STATE_OFF, 1},
-  {"B", "channel_B", D2, STATE_OFF, 1}
+  {"B", "channel_B", D2, STATE_OFF, 1},
+  {"C", "channel_C", D4, STATE_OFF, 1},
+  {"D", "channel_D", D5, STATE_OFF, 1}
 };
-
 const uint8_t LED_PIN         = D7;
 
 #elif ESP12
 
 Channel _channels[] = {
   // Name, valve pin, state, irr time (minutes)
-  {"macetero", 13, STATE_OFF, 1},
-  {"huerta_vertical", 12, STATE_OFF, 1}
+  {"A", "channel_A", 1, STATE_OFF, 1},
+  {"B", "channel_B", 2, STATE_OFF, 1},
+  {"C", "channel_C", 3, STATE_OFF, 1},
+  {"D", "channel_D", 4, STATE_OFF, 1}
 };
 
 const uint8_t LED_PIN         = 5;
-const uint8_t CHANNELS_COUNT  = 2;
-
 #endif
 
 template <class T> void log (T text) {
@@ -170,10 +172,10 @@ template <class T, class U> void log (T key, U value) {
   #endif
 }
 
-ConfigParam _moduleNameCfg      = {Text, "moduleName", "Module name", "", PARAM_LENGTH, "required"};
-ConfigParam _moduleLocationCfg  = {Text, "moduleLocation", "Module location", "", PARAM_LENGTH, "required"};
-ConfigParam _mqttPortCfg        = {Text, "mqttPort", "MQTT port", "", PARAM_LENGTH, ""};
-ConfigParam _mqttHostCfg        = {Text, "mqttHost", "MQTT host", "", PARAM_LENGTH, ""};
+ConfigParam _moduleNameCfg (Text, "moduleName", "Module name", "", PARAM_LENGTH, "required");
+ConfigParam _moduleLocationCfg (Text, "moduleLocation", "Module location", "", PARAM_LENGTH, "required");
+ConfigParam _mqttPortCfg (Text, "mqttPort", "MQTT port", "", PARAM_LENGTH, "required");
+ConfigParam _mqttHostCfg (Text, "mqttHost", "MQTT host", "", PARAM_LENGTH, "required");
 
 void setup() {
   Serial.begin(115200);
@@ -181,10 +183,10 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   Serial.println();
   log("Starting module");
-  _configParams[0] = &_moduleNameCfg;
-  _configParams[1] = &_moduleLocationCfg;
-  _configParams[2] = &_mqttPortCfg;
-  _configParams[3] = &_mqttHostCfg;
+  _configParams[0] = &_moduleLocationCfg;
+  _configParams[1] = &_moduleNameCfg;
+  _configParams[2] = &_mqttHostCfg;
+  _configParams[3] = &_mqttPortCfg;
   connectWifiNetwork(loadConfig());
   // pins settings
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {

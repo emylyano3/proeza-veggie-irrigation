@@ -117,6 +117,10 @@ const long      _connectionTimeout  = WIFI_CONN_TIMEOUT * 1000;
 const uint16_t  _connectionTimeout  = 0;
 #endif
 
+/* Signal feedback */
+bool sigfbk_isOn          = false;
+long sigfbk_stepControl   = 0;
+
 /* MQTT broker connection control */
 long            _nextBrokerConnAtte = 0;
 long            _lastTimerCheck     = -TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE; // TIMER_CHECK_THRESHOLD is in minutes
@@ -192,10 +196,8 @@ void setup() {
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
     pinMode(_channels[i].valvePin, OUTPUT);
     digitalWrite(_channels[i].valvePin, HIGH);
-    // pinMode(_channels[i].soilSensorPin, INPUT);
-    // digitalWrite(_channels[i].soilSensorPin, HIGH);
   }
-  flashLed(LED_PIN, 100, 5);
+  signalFeedback(LED_PIN, 100, 8);
   loadChannelsSettings();
   log(F("Connected to wifi network. Local IP"), WiFi.localIP());
   configTime(TIMEZONE * 3600, 0, "br.pool.ntp.org", "cl.pool.ntp.org", "co.pool.ntp.org"); // brazil, chile, colombia
@@ -230,15 +232,6 @@ void loop() {
   checkIrrigation();
   _mqttClient.loop();
   delay(LOOP_DELAY);
-}
-
-void flashLed (uint8_t pin, long _delay, uint8_t times) {
-  for (int i = 0; i < times; ++i) {
-    digitalWrite(pin, HIGH);
-    delay(_delay);
-    digitalWrite(pin, LOW);
-    delay(_delay);
-  }
 }
 
 void checkIrrigation() {
@@ -685,9 +678,6 @@ const char HTTP_SCAN_LINK[] PROGMEM                 = "<br/><div class=\"c\"><a 
 const char HTTP_SAVED[] PROGMEM                     = "<div>Credentials Saved<br/>Trying to connect ESP to network.<br/>If it fails reconnect to AP to try again</div>";
 const char HTTP_END[] PROGMEM                       = "</div></body></html>";
 
-bool lfck_isOn    = false;
-long lfck_cursor  = 0;
-
 void connectWifiNetwork (bool existsConfig) {
   log(F("Connecting to wifi network"));
   bool connected = false;
@@ -738,7 +728,7 @@ bool startConfigPortal() {
         break;
       }
     }
-    ledFeedback(1000);
+    signalFeedback(LED_PIN, 1000);
     yield();
   }
   _server.reset();
@@ -746,11 +736,22 @@ bool startConfigPortal() {
   return  WiFi.status() == WL_CONNECTED;
 }
 
-void ledFeedback(int step) {
-  if (millis() > lfck_cursor + step) {
-    lfck_isOn = !lfck_isOn;
-    lfck_cursor = millis();
-    digitalWrite(LED_PIN, lfck_isOn ? HIGH : LOW);
+/* Blocking signal feedback. Turns on/off a signal a specific times waiting a step time for each state flip */
+void signalFeedback (uint8_t pin, long stepTime, uint8_t times) {
+  for (int i = 0; i < times; ++i) {
+    digitalWrite(pin, HIGH);
+    delay(stepTime);
+    digitalWrite(pin, LOW);
+    delay(stepTime);
+  }
+}
+
+/* Non blocking signal feedback (to be used inside a loop). Uses global variables to control when to flip the signal state according to the step time. */
+void signalFeedback(uint8_t pin, int stepTime) {
+  if (millis() > sigfbk_stepControl + stepTime) {
+    sigfbk_isOn = !sigfbk_isOn;
+    sigfbk_stepControl = millis();
+    digitalWrite(pin, sigfbk_isOn ? HIGH : LOW);
   }
 }
 

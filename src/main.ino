@@ -13,6 +13,7 @@ extern "C" {
   #include "user_interface.h"
 }
 
+/* Constants */
 const char    STATE_OFF         = '0';
 const char    STATE_ON          = '1';
 const char*   CONFIG_FILE       = "/config.json";
@@ -21,6 +22,7 @@ const char*   DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
 const char*   MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
 const long    MILLIS_IN_MINUTE  = 60000;
 
+/* Structs */
 enum InputType {Combo, Text};
 
 struct ConfigParam {
@@ -62,8 +64,8 @@ struct Channel {
   char*         name; // configurable over mqtt
   uint8_t       valvePin;
   char          state;
-  long          irrigationDuration; // millis configurable over mqtt
-  long          irrigationStopTime; // millis
+  unsigned long irrigationDuration; // millis configurable over mqtt
+  unsigned long irrigationStopTime; // millis
   bool          enabled; // configurable over mqtt
 
   Channel(const char* _id, const char* _name, uint8_t _vp, uint8_t _vs, uint8_t _irrDur) {
@@ -102,40 +104,40 @@ ESP8266WebServer                  _httpServer(80);
 ESP8266HTTPUpdateServer           _httpUpdater;
 
 /* Wifi configuration control */
-const char*     _apPass             = "12345678";
+const char*     _apPass               = "12345678";
 bool            _connect;
 
 #ifdef WIFI_MIN_QUALITY
-const uint8_t   _minimumQuality     = WIFI_MIN_QUALITY;
+const uint8_t   _minimumQuality       = WIFI_MIN_QUALITY;
 #else
-const uint8_t   _minimumQuality = -1;
+const uint8_t   _minimumQuality       = -1;
 #endif
 
 #ifdef WIFI_CONN_TIMEOUT
-const long      _connectionTimeout  = WIFI_CONN_TIMEOUT * 1000;
+const long      _connectionTimeout    = WIFI_CONN_TIMEOUT * 1000;
 #else
-const uint16_t  _connectionTimeout  = 0;
+const uint16_t  _connectionTimeout    = 0;
 #endif
 
 /* Signal feedback */
-bool sigfbk_isOn          = false;
-long sigfbk_stepControl   = 0;
+bool            _sigfbkIsOn           = false;
+unsigned long   _sigfbkStepControl    = 0;
 
-/* MQTT broker connection control */
-long            _nextBrokerConnAtte = 0;
-long            _lastTimerCheck     = -TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE; // TIMER_CHECK_THRESHOLD is in minutes
+/* MQTT broker reconnection control */
+unsigned long   _mqttNextConnAtte     = 0;
 
 /* Irrigation control */
-char*           _cronExpression[] = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
-bool            _irrigating       = false;
-uint8_t         _currChannel      = 0;
+char*           _irrCronExpression[]  = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
+bool            _irrigating           = false;
+uint8_t         _irrCurrChannel       = 0;
+unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE; // TIMER_CHECK_THRESHOLD is in minutes
 
 /* Configuration control */
-const uint8_t   PARAMS_COUNT    = 4;
-ConfigParam**   _configParams   = (ConfigParam**)malloc(PARAMS_COUNT * sizeof(ConfigParam*));
+const uint8_t   PARAMS_COUNT          = 4;
+ConfigParam**   _configParams         = (ConfigParam**)malloc(PARAMS_COUNT * sizeof(ConfigParam*));
 
 /* Channels control */
-const uint8_t CHANNELS_COUNT  = 4;
+const uint8_t CHANNELS_COUNT          = 4;
 
 #ifdef NODEMCUV2
 Channel _channels[] = {
@@ -148,7 +150,6 @@ Channel _channels[] = {
 const uint8_t LED_PIN         = D7;
 
 #elif ESP12
-
 Channel _channels[] = {
   // Name, valve pin, state, irr time (minutes)
   {"A", "channel_A", 1, STATE_OFF, 1},
@@ -240,29 +241,29 @@ void checkIrrigation() {
       if (isTimeToIrrigate()) {
         log(F("Irrigation sequence started"));
         _irrigating = true;
-        _currChannel = 0;
+        _irrCurrChannel = 0;
         _mqttClient.publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
       }
     }
   } else {
-    if (_currChannel >= CHANNELS_COUNT) {
+    if (_irrCurrChannel >= CHANNELS_COUNT) {
       log(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
       _mqttClient.publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
     } else {
-      if (!isChannelEnabled(&_channels[_currChannel])) {
+      if (!isChannelEnabled(&_channels[_irrCurrChannel])) {
         log(F("Channel is disabled, going to next one."));
-        ++_currChannel;
+        ++_irrCurrChannel;
       } else {
-        if (_channels[_currChannel].state == STATE_OFF) {
-          log(F("Starting channel"), _channels[_currChannel].name);
-          log(F("Channel irrigation duration (minutes)"), _channels[_currChannel].irrigationDuration / MILLIS_IN_MINUTE);
-          openValve(&_channels[_currChannel]);
-          _channels[_currChannel].irrigationStopTime = millis() + _channels[_currChannel].irrigationDuration;
+        if (_channels[_irrCurrChannel].state == STATE_OFF) {
+          log(F("Starting channel"), _channels[_irrCurrChannel].name);
+          log(F("Channel irrigation duration (minutes)"), _channels[_irrCurrChannel].irrigationDuration / MILLIS_IN_MINUTE);
+          openValve(&_channels[_irrCurrChannel]);
+          _channels[_irrCurrChannel].irrigationStopTime = millis() + _channels[_irrCurrChannel].irrigationDuration;
         } else {
-           if (millis() > _channels[_currChannel].irrigationStopTime) {
-            log(F("Stoping channel"), _channels[_currChannel].name);
-            closeValve(&_channels[_currChannel++]);
+           if (millis() > _channels[_irrCurrChannel].irrigationStopTime) {
+            log(F("Stoping channel"), _channels[_irrCurrChannel].name);
+            closeValve(&_channels[_irrCurrChannel++]);
             delay(CLOSE_VALVE_DELAY);
           }
         }
@@ -281,12 +282,12 @@ void updateCronExpression (const char* sec, const char* min, const char* hour, c
 }
 
 void updateCronExpressionChunk(const char* a, uint8_t index) {
-  String(a).toCharArray(_cronExpression[index], 4);
+  String(a).toCharArray(_irrCronExpression[index], 4);
 }
 
 bool isTimeToCheckSchedule () {
-  bool isTime = _lastTimerCheck + TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE < millis();
-  _lastTimerCheck = isTime ? millis() : _lastTimerCheck;
+  bool isTime = _irrLastScheduleCheck + TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE < millis();
+  _irrLastScheduleCheck = isTime ? millis() : _irrLastScheduleCheck;
   return isTime;
 }
 
@@ -300,11 +301,11 @@ bool isTimeToIrrigate () {
   String mon = ptm->tm_mon < 12 ? String(MONTHS_OF_YEAR[ptm->tm_mon]): "";
   // Evaluates cron at minute level. Seconds granularity is not needed for irrigarion scheduling.
   bool timeToIrrigate = true;
-  timeToIrrigate &= String(_cronExpression[5]).equals("?") || String(_cronExpression[5]).equalsIgnoreCase(dow) || String(_cronExpression[5]).equals(String(ptm->tm_wday + 1)); // Day of week
-  timeToIrrigate &= String(_cronExpression[4]).equals("*") || String(_cronExpression[4]).equalsIgnoreCase(mon) || String(_cronExpression[4]).equals(String(ptm->tm_mon + 1)); // Month
-  timeToIrrigate &= String(_cronExpression[3]).equals("*") || String(_cronExpression[3]).equals(String(ptm->tm_mday)); // Day of month
-  timeToIrrigate &= String(_cronExpression[2]).equals("*") || String(_cronExpression[2]).equals(String(ptm->tm_hour)); // Hour
-  timeToIrrigate &= String(_cronExpression[1]).equals("*") || String(_cronExpression[1]).toInt() == ptm->tm_min || (String(_cronExpression[1]).toInt() > ptm->tm_min && String(_cronExpression[1]).toInt() - TIMER_CHECK_THRESHOLD < ptm->tm_min); // Minute
+  timeToIrrigate &= String(_irrCronExpression[5]).equals("?") || String(_irrCronExpression[5]).equalsIgnoreCase(dow) || String(_irrCronExpression[5]).equals(String(ptm->tm_wday + 1)); // Day of week
+  timeToIrrigate &= String(_irrCronExpression[4]).equals("*") || String(_irrCronExpression[4]).equalsIgnoreCase(mon) || String(_irrCronExpression[4]).equals(String(ptm->tm_mon + 1)); // Month
+  timeToIrrigate &= String(_irrCronExpression[3]).equals("*") || String(_irrCronExpression[3]).equals(String(ptm->tm_mday)); // Day of month
+  timeToIrrigate &= String(_irrCronExpression[2]).equals("*") || String(_irrCronExpression[2]).equals(String(ptm->tm_hour)); // Hour
+  timeToIrrigate &= String(_irrCronExpression[1]).equals("*") || String(_irrCronExpression[1]).toInt() == ptm->tm_min || (String(_irrCronExpression[1]).toInt() > ptm->tm_min && String(_irrCronExpression[1]).toInt() - TIMER_CHECK_THRESHOLD < ptm->tm_min); // Minute
   return timeToIrrigate;
 }
 
@@ -585,7 +586,7 @@ void updateCron(unsigned char* payload, unsigned int length) {
   #ifdef LOGGING
   Serial.print("New cron expression: ");
   for (int i = 0; i < 6; ++i) {
-    Serial.print(_cronExpression[i]);
+    Serial.print(_irrCronExpression[i]);
     Serial.print(" ");
   }
   Serial.println();
@@ -600,8 +601,8 @@ bool changeState(unsigned char* payload, unsigned int length) {
       case STATE_OFF:
         if (_irrigating) {
           // Set irrigation end to 0 to simulate it should have ended 
-          _channels[_currChannel].irrigationStopTime = 0;
-          closeValve(&_channels[_currChannel]);
+          _channels[_irrCurrChannel].irrigationStopTime = 0;
+          closeValve(&_channels[_irrCurrChannel]);
           _irrigating = false;
           log(F("Irrigation stopped"));
         }
@@ -609,7 +610,7 @@ bool changeState(unsigned char* payload, unsigned int length) {
       case STATE_ON:
         if (!_irrigating) {
           _irrigating = true;
-          _currChannel = 0;
+          _irrCurrChannel = 0;
           log(F("Irrigation started"));
         }
         return true;
@@ -625,8 +626,8 @@ bool isChannelEnabled (Channel *c) {
 }
 
 void connectBroker() {
-  if (_nextBrokerConnAtte <= millis()) {
-    _nextBrokerConnAtte = millis() + MQTT_BROKER_CONNECTION_RETRY;
+  if (_mqttNextConnAtte <= millis()) {
+    _mqttNextConnAtte = millis() + MQTT_BROKER_CONNECTION_RETRY;
     log(F("Connecting MQTT broker as"), getStationName());
     if (_mqttClient.connect(getStationName())) {
       log(F("MQTT broker Connected"));
@@ -695,7 +696,7 @@ void connectWifiNetwork (bool existsConfig) {
       connected = startConfigPortal();
     }
   }
-  log("Freeieng mem used for configuration");
+  log("Freeing mem used for configuration");
   for (uint8_t i = 0; i < PARAMS_COUNT; ++i) {
     _configParams[i]->name = NULL;
     _configParams[i]->label = NULL;
@@ -738,7 +739,7 @@ bool startConfigPortal() {
 
 /* Blocking signal feedback. Turns on/off a signal a specific times waiting a step time for each state flip */
 void signalFeedback (uint8_t pin, long stepTime, uint8_t times) {
-  for (int i = 0; i < times; ++i) {
+  for (uint8_t i = 0; i < times; ++i) {
     digitalWrite(pin, HIGH);
     delay(stepTime);
     digitalWrite(pin, LOW);
@@ -748,10 +749,10 @@ void signalFeedback (uint8_t pin, long stepTime, uint8_t times) {
 
 /* Non blocking signal feedback (to be used inside a loop). Uses global variables to control when to flip the signal state according to the step time. */
 void signalFeedback(uint8_t pin, int stepTime) {
-  if (millis() > sigfbk_stepControl + stepTime) {
-    sigfbk_isOn = !sigfbk_isOn;
-    sigfbk_stepControl = millis();
-    digitalWrite(pin, sigfbk_isOn ? HIGH : LOW);
+  if (millis() > _sigfbkStepControl + stepTime) {
+    _sigfbkIsOn = !_sigfbkIsOn;
+    _sigfbkStepControl = millis();
+    digitalWrite(pin, _sigfbkIsOn ? HIGH : LOW);
   }
 }
 
@@ -1010,8 +1011,8 @@ bool captivePortal() {
 }
 
 bool isIp(String str) {
-  for (int i = 0; i < str.length(); i++) {
-    int c = str.charAt(i);
+  for (unsigned int i = 0; i < str.length(); i++) {
+    char c = str.charAt(i);
     if (c != '.' && (c < '0' || c > '9')) {
       return false;
     }

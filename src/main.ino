@@ -61,12 +61,12 @@ struct ConfigParam {
 
 struct Channel {
   const char*   id;
-  char*         name; // configurable over mqtt
+  char*         name;               // configurable over mqtt
   uint8_t       valvePin;
   char          state;
   unsigned long irrigationDuration; // millis configurable over mqtt
   unsigned long irrigationStopTime; // millis
-  bool          enabled; // configurable over mqtt
+  bool          enabled;            // configurable over mqtt
 
   Channel(const char* _id, const char* _name, uint8_t _vp, uint8_t _vs, uint8_t _irrDur) {
     id = _id;

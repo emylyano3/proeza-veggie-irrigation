@@ -146,6 +146,8 @@ void setup() {
   moduleConfig.addParameter(&_mqttPortCfg);
   moduleConfig.setTimeout(_connectionTimeout);
   moduleConfig.setPortalSSID("ESP-Irrigation");
+  moduleConfig.setFeedbackPin(LED_PIN);
+  moduleConfig.setAPStaticIP(IPAddress(10,10,10,10),IPAddress(IPAddress(10,10,10,10)),IPAddress(IPAddress(255,255,255,0)));
   moduleConfig.setMinimumSignalQuality(_minimumQuality);
   moduleConfig.setSaveConfigCallback(saveConfig);
   moduleConfig.setStationNameCallback(getStationName);

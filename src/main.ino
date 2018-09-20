@@ -127,7 +127,7 @@ template <class T, class U> void log (T key, U value) {
   #endif
 }
 
-ESPConfig moduleConfig;
+ESPConfig _moduleConfig;
 
 ESPConfigParam _moduleNameCfg (Text, "moduleName", "Module name", "", PARAM_LENGTH, "required");
 ESPConfigParam _moduleLocationCfg (Text, "moduleLocation", "Module location", "", PARAM_LENGTH, "required");
@@ -140,19 +140,19 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   Serial.println();
   log("Starting module");
-  moduleConfig.addParameter(&_moduleLocationCfg);
-  moduleConfig.addParameter(&_moduleNameCfg);
-  moduleConfig.addParameter(&_mqttHostCfg);
-  moduleConfig.addParameter(&_mqttPortCfg);
-  moduleConfig.setTimeout(_connectionTimeout);
-  moduleConfig.setPortalSSID("ESP-Irrigation");
-  moduleConfig.setFeedbackPin(LED_PIN);
-  moduleConfig.setAPStaticIP(IPAddress(10,10,10,10),IPAddress(IPAddress(10,10,10,10)),IPAddress(IPAddress(255,255,255,0)));
-  moduleConfig.setMinimumSignalQuality(_minimumQuality);
-  moduleConfig.setSaveConfigCallback(saveConfig);
-  moduleConfig.setStationNameCallback(getStationName);
-  moduleConfig.connectWifiNetwork(loadConfig());
-  moduleConfig.blockingFeedback(LED_PIN, 100, 8);
+  _moduleConfig.addParameter(&_moduleLocationCfg);
+  _moduleConfig.addParameter(&_moduleNameCfg);
+  _moduleConfig.addParameter(&_mqttHostCfg);
+  _moduleConfig.addParameter(&_mqttPortCfg);
+  _moduleConfig.setConnectionTimeout(_connectionTimeout);
+  _moduleConfig.setPortalSSID("ESP-Irrigation");
+  _moduleConfig.setFeedbackPin(LED_PIN);
+  _moduleConfig.setAPStaticIP(IPAddress(10,10,10,10),IPAddress(IPAddress(10,10,10,10)),IPAddress(IPAddress(255,255,255,0)));
+  _moduleConfig.setMinimumSignalQuality(_minimumQuality);
+  _moduleConfig.setSaveConfigCallback(saveConfig);
+  _moduleConfig.setStationNameCallback(getStationName);
+  _moduleConfig.connectWifiNetwork(loadConfig());
+  _moduleConfig.blockingFeedback(LED_PIN, 100, 8);
 
   // pins settings
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
@@ -302,8 +302,8 @@ bool loadConfig () {
       Serial.println();
       #endif
       for (uint8_t i = 0; i < PARAMS_COUNT; ++i) {
-        moduleConfig.getParameter(i)->updateValue(json[moduleConfig.getParameter(i)->getName()]);
-        log(moduleConfig.getParameter(i)->getName(), moduleConfig.getParameter(i)->getValue());
+        _moduleConfig.getParameter(i)->updateValue(json[_moduleConfig.getParameter(i)->getName()]);
+        log(_moduleConfig.getParameter(i)->getName(), _moduleConfig.getParameter(i)->getValue());
       }
       return true;
     } else {
@@ -388,7 +388,7 @@ void saveConfig () {
     JsonObject& json = jsonBuffer.createObject();
     //TODO Trim param values
     for (uint8_t i = 0; i < PARAMS_COUNT; ++i) {
-      json[moduleConfig.getParameter(i)->getName()] = moduleConfig.getParameter(i)->getValue();
+      json[_moduleConfig.getParameter(i)->getName()] = _moduleConfig.getParameter(i)->getValue();
     }
     json.printTo(file);
     log(F("Configuration file saved"));

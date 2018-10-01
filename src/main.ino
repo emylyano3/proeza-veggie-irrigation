@@ -1,11 +1,7 @@
 #include <FS.h>
 #include <WiFiClient.h>
-#include <PubSubClient.h>
-
-#include <ESP8266WebServer.h>
-#include <ESP8266HTTPUpdateServer.h>
+#include <ESP8266WiFi.h>
 #include <ArduinoJson.h>
-#include <ESP8266mDNS.h>
 #include <MQTTModule.h>
 #include <time.h>
 
@@ -16,7 +12,6 @@ extern "C" {
 /* Constants */
 const char    STATE_OFF         = '0';
 const char    STATE_ON          = '1';
-const char*   CONFIG_FILE       = "/config.json";
 const char*   SETTINGS_FILE     = "/settings.json";
 const char*   DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
 const char*   MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
@@ -53,40 +48,20 @@ struct Channel {
     String s = String(v);
     s.toCharArray(name, CHANNEL_NAME_LENGTH);
   }
+
+  bool isEnabled () {
+    return enabled && name != NULL && strlen(name) > 0;
+  }
 };
 
 /* Module settings */
 const String  MODULE_TYPE           = "irrigation";
-char          _stationName[PARAM_LENGTH * 3 + 4];
-
-WiFiClient                _wifiClient;
-PubSubClient              _mqttClient(_wifiClient);
-ESP8266WebServer          _httpServer(80);
-ESP8266HTTPUpdateServer   _httpUpdater;
-
-#ifdef WIFI_MIN_QUALITY
-const uint8_t   _minimumQuality       = WIFI_MIN_QUALITY;
-#else
-const uint8_t   _minimumQuality       = -1;
-#endif
-
-#ifdef WIFI_CONN_TIMEOUT
-const long      _connectionTimeout    = WIFI_CONN_TIMEOUT * 1000;
-#else
-const uint16_t  _connectionTimeout    = 0;
-#endif
-
-/* MQTT broker reconnection control */
-unsigned long   _mqttNextConnAtte     = 0;
 
 /* Irrigation control */
 char*           _irrCronExpression[]  = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
 bool            _irrigating           = false;
 uint8_t         _irrCurrChannel       = 0;
 unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD * MILLIS_IN_MINUTE; // TIMER_CHECK_THRESHOLD is in minutes
-
-/* Configuration control */
-const uint8_t   PARAMS_COUNT          = 4;
 
 /* Channels control */
 const uint8_t CHANNELS_COUNT          = 4;
@@ -131,30 +106,20 @@ template <class T, class U> void log (T key, U value) {
 
 MQTTModule _moduleConfig;
 
-// ESPConfigParam _moduleNameCfg (Text, "moduleName", "Module name", "", PARAM_LENGTH, "required");
-// ESPConfigParam _moduleLocationCfg (Text, "moduleLocation", "Module location", "", PARAM_LENGTH, "required");
-// ESPConfigParam _mqttPortCfg (Text, "mqttPort", "MQTT port", "", PARAM_LENGTH, "required");
-// ESPConfigParam _mqttHostCfg (Text, "mqttHost", "MQTT host", "", PARAM_LENGTH, "required");
-
 void setup() {
   Serial.begin(115200);
   delay(500);
   pinMode(LED_PIN, OUTPUT);
   Serial.println();
   log("Starting module");
-  // _moduleConfig.addParameter(&_moduleLocationCfg);
-  // _moduleConfig.addParameter(&_moduleNameCfg);
-  // _moduleConfig.addParameter(&_mqttHostCfg);
-  // _moduleConfig.addParameter(&_mqttPortCfg);
   // _moduleConfig.setConnectionTimeout(_connectionTimeout);
   // _moduleConfig.setPortalSSID("ESP-Irrigation");
   // _moduleConfig.setFeedbackPin(LED_PIN);
   // _moduleConfig.setAPStaticIP(IPAddress(10,10,10,10),IPAddress(IPAddress(10,10,10,10)),IPAddress(IPAddress(255,255,255,0)));
   // _moduleConfig.setMinimumSignalQuality(_minimumQuality);
-  // _moduleConfig.setSaveConfigCallback(saveConfig);
   // _moduleConfig.setStationNameCallback(getStationName);
-  // _moduleConfig.connectWifiNetwork(loadConfig());
-  // _moduleConfig.blockingFeedback(LED_PIN, 100, 8);
+  _moduleConfig.setMqttConnectionCallback(mqttConnectionCallback);
+  _moduleConfig.setMqttMessageCallback(receiveMqttMessage);
   _moduleConfig.init();
   // pins settings
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
@@ -170,29 +135,11 @@ void setup() {
   }
   // Default cron every day at 4:00 AM
   updateCronExpression("0","0","4","*","*","?");
-  log(F("Configuring MQTT broker"));
-  log(F("Port"), _moduleConfig.getMqttServerPort());
-  log(F("Server"), _moduleConfig.getMqttServerHost());
-  _mqttClient.setServer(_moduleConfig.getMqttServerHost(), _moduleConfig.getMqttServerPort());
-  _mqttClient.setCallback(receiveMqttMessage);
-
-  log(F("Setting OTA update"));
-  MDNS.begin(getStationName());
-  MDNS.addService("http", "tcp", 80);
-  _httpUpdater.setup(&_httpServer);
-  _httpServer.begin();
-  log(F("HTTPUpdateServer ready.")); 
-  log("Open http://" + String(getStationName()) + ".local/update");
-  log("Open http://" + WiFi.localIP().toString() + "/update");
 }
 
 void loop() {
-  _httpServer.handleClient();
-  if (!_mqttClient.connected()) {
-    connectBroker();
-  }
+  _moduleConfig.loop();
   checkIrrigation();
-  _mqttClient.loop();
   delay(LOOP_DELAY);
 }
 
@@ -203,16 +150,16 @@ void checkIrrigation() {
         log(F("Irrigation sequence started"));
         _irrigating = true;
         _irrCurrChannel = 0;
-        _mqttClient.publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
+        _moduleConfig.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
       }
     }
   } else {
     if (_irrCurrChannel >= CHANNELS_COUNT) {
       log(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
-      _mqttClient.publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
+      _moduleConfig.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
     } else {
-      if (!isChannelEnabled(&_channels[_irrCurrChannel])) {
+      if (!_channels[_irrCurrChannel].isEnabled()) {
         log(F("Channel is disabled, going to next one."));
         ++_irrCurrChannel;
       } else {
@@ -230,6 +177,13 @@ void checkIrrigation() {
         }
       }
     }
+  }
+}
+
+void mqttConnectionCallback() {
+  _moduleConfig.getMqttClient()->subscribe(getStationTopic("+").c_str());
+  for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
+    _moduleConfig.getMqttClient()->subscribe(getChannelTopic(&_channels[i], "+").c_str());
   }
 }
 
@@ -320,7 +274,7 @@ bool loadChannelsSettings () {
   return false;
 }
 
-void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length) {
+void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
   log(F("Received mqtt message topic"), topic);
   // Station topics
   if (String(topic).equals(getStationTopic("hrst"))) {
@@ -329,7 +283,7 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
     updateCron(payload, length);
   } else if (String(topic).equals(getStationTopic("control"))) {
     changeState(payload, length);
-    _mqttClient.publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
+    _moduleConfig.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
   } else {
     // Channels topics
     for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
@@ -337,7 +291,7 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
         if (enableChannel(&_channels[i], payload, length)) {
           saveChannelsSettings();
         }
-        _mqttClient.publish(getChannelTopic(&_channels[i], "state").c_str(), _channels[i].enabled ? "1" : "0");
+        _moduleConfig.getMqttClient()->publish(getChannelTopic(&_channels[i], "state").c_str(), _channels[i].enabled ? "1" : "0");
       } else if (getChannelTopic(&_channels[i], "irrdur").equals(topic)) {
         if (updateChannelIrrigationDuration(&_channels[i], payload, length)) {
           saveChannelsSettings();
@@ -388,9 +342,9 @@ bool renameChannel(Channel* c, unsigned char* payload, unsigned int length) {
   bool renamed = !String(c->name).equals(String(newName));
   if (renamed) {
     log(F("Channel renamed"), newName);
-    _mqttClient.unsubscribe(getChannelTopic(c, "+").c_str());
+    _moduleConfig.getMqttClient()->unsubscribe(getChannelTopic(c, "+").c_str());
     c->updateName(newName);
-    _mqttClient.subscribe(getChannelTopic(c, "+").c_str());
+    _moduleConfig.getMqttClient()->subscribe(getChannelTopic(c, "+").c_str());
   }
   return renamed;
 }
@@ -499,40 +453,6 @@ bool changeState(unsigned char* payload, unsigned int length) {
     }
   }
   return false;
-}
-
-bool isChannelEnabled (Channel *c) {
-  return c->enabled && c->name != NULL && strlen(c->name) > 0;
-}
-
-void connectBroker() {
-  if (_mqttNextConnAtte <= millis()) {
-    _mqttNextConnAtte = millis() + MQTT_BROKER_CONNECTION_RETRY;
-    log(F("Connecting MQTT broker as"), getStationName());
-    if (_mqttClient.connect(getStationName())) {
-      log(F("MQTT broker Connected"));
-      _mqttClient.subscribe(getStationTopic("+").c_str());
-      for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-        _mqttClient.subscribe(getChannelTopic(&_channels[i], "+").c_str());
-      }
-    } else {
-      log(F("Failed. RC:"), _mqttClient.state());
-    }
-  }
-}
-
-char* getStationName () {
-  if (strlen(_stationName) <= 0) {
-    size_t size = MODULE_TYPE.length() + strlen(_moduleConfig.getModuleLocation()) + strlen(_moduleConfig.getModuleName()) + 4;
-    String sn;
-    sn.concat(MODULE_TYPE);
-    sn.concat("_");
-    sn.concat(_moduleConfig.getModuleLocation()); 
-    sn.concat("_");
-    sn.concat(_moduleConfig.getModuleName());
-    sn.toCharArray(_stationName, size);
-  } 
-  return _stationName;
 }
 
 String getChannelTopic (Channel *c, String cmd) {

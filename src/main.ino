@@ -55,7 +55,7 @@ struct Channel {
 };
 
 /* Module settings */
-const String  MODULE_TYPE           = "irrigation";
+const char*     _moduleType           = "irrigation";
 
 /* Irrigation control */
 char*           _irrCronExpression[]  = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
@@ -112,13 +112,12 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   Serial.println();
   log("Starting module");
-  // _domoticModule.setConnectionTimeout(_connectionTimeout);
-  // _domoticModule.setPortalSSID("ESP-Irrigation");
-  // _domoticModule.setAPStaticIP(IPAddress(10,10,10,10),IPAddress(IPAddress(10,10,10,10)),IPAddress(IPAddress(255,255,255,0)));
-  // _domoticModule.setMinimumSignalQuality(_minimumQuality);
+  String ssid = "Proeza irrigation " + String(ESP.getChipId());
+  _domoticModule.setPortalSSID(ssid.c_str());
   _domoticModule.setFeedbackPin(LED_PIN);
   _domoticModule.setMqttConnectionCallback(mqttConnectionCallback);
   _domoticModule.setMqttMessageCallback(receiveMqttMessage);
+  _domoticModule.setModuleType(_moduleType);
   _domoticModule.init();
   // pins settings
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
@@ -455,9 +454,9 @@ bool changeState(unsigned char* payload, unsigned int length) {
 }
 
 String getChannelTopic (Channel *c, String cmd) {
-  return MODULE_TYPE + F("/") + _domoticModule.getModuleLocation() + F("/") + _domoticModule.getModuleName() + F("/") + c->name + F("/") + cmd;
+  return String(_moduleType) + F("/") + _domoticModule.getModuleLocation() + F("/") + _domoticModule.getModuleName() + F("/") + c->name + F("/") + cmd;
 }
 
 String getStationTopic (String cmd) {
-  return MODULE_TYPE + F("/") + _domoticModule.getModuleLocation() + F("/") + _domoticModule.getModuleName() + F("/") + cmd;
+  return String(_moduleType) + F("/") + _domoticModule.getModuleLocation() + F("/") + _domoticModule.getModuleName() + F("/") + cmd;
 }

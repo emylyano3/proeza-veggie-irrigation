@@ -75,7 +75,7 @@ Channel _channels[] = {
   {"D", "channel_D", D5, STATE_OFF, 1}
 };
 const uint8_t LED_PIN         = D7;
-
+// TODO Define pin consts un configuration file (ini file)
 #elif ESP12
 Channel _channels[] = {
   // Name, valve pin, state, irr time (minutes)
@@ -104,7 +104,7 @@ template <class T, class U> void log (T key, U value) {
   #endif
 }
 
-MQTTModule _moduleConfig;
+MQTTModule _domoticModule;
 
 void setup() {
   Serial.begin(115200);
@@ -112,15 +112,14 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   Serial.println();
   log("Starting module");
-  // _moduleConfig.setConnectionTimeout(_connectionTimeout);
-  // _moduleConfig.setPortalSSID("ESP-Irrigation");
-  // _moduleConfig.setFeedbackPin(LED_PIN);
-  // _moduleConfig.setAPStaticIP(IPAddress(10,10,10,10),IPAddress(IPAddress(10,10,10,10)),IPAddress(IPAddress(255,255,255,0)));
-  // _moduleConfig.setMinimumSignalQuality(_minimumQuality);
-  // _moduleConfig.setStationNameCallback(getStationName);
-  _moduleConfig.setMqttConnectionCallback(mqttConnectionCallback);
-  _moduleConfig.setMqttMessageCallback(receiveMqttMessage);
-  _moduleConfig.init();
+  // _domoticModule.setConnectionTimeout(_connectionTimeout);
+  // _domoticModule.setPortalSSID("ESP-Irrigation");
+  // _domoticModule.setAPStaticIP(IPAddress(10,10,10,10),IPAddress(IPAddress(10,10,10,10)),IPAddress(IPAddress(255,255,255,0)));
+  // _domoticModule.setMinimumSignalQuality(_minimumQuality);
+  _domoticModule.setFeedbackPin(LED_PIN);
+  _domoticModule.setMqttConnectionCallback(mqttConnectionCallback);
+  _domoticModule.setMqttMessageCallback(receiveMqttMessage);
+  _domoticModule.init();
   // pins settings
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
     pinMode(_channels[i].valvePin, OUTPUT);
@@ -138,7 +137,7 @@ void setup() {
 }
 
 void loop() {
-  _moduleConfig.loop();
+  _domoticModule.loop();
   checkIrrigation();
   delay(LOOP_DELAY);
 }
@@ -150,14 +149,14 @@ void checkIrrigation() {
         log(F("Irrigation sequence started"));
         _irrigating = true;
         _irrCurrChannel = 0;
-        _moduleConfig.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
+        _domoticModule.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
       }
     }
   } else {
     if (_irrCurrChannel >= CHANNELS_COUNT) {
       log(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
-      _moduleConfig.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
+      _domoticModule.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
     } else {
       if (!_channels[_irrCurrChannel].isEnabled()) {
         log(F("Channel is disabled, going to next one."));
@@ -181,9 +180,9 @@ void checkIrrigation() {
 }
 
 void mqttConnectionCallback() {
-  _moduleConfig.getMqttClient()->subscribe(getStationTopic("+").c_str());
+  _domoticModule.getMqttClient()->subscribe(getStationTopic("+").c_str());
   for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
-    _moduleConfig.getMqttClient()->subscribe(getChannelTopic(&_channels[i], "+").c_str());
+    _domoticModule.getMqttClient()->subscribe(getChannelTopic(&_channels[i], "+").c_str());
   }
 }
 
@@ -245,10 +244,10 @@ void closeValve(Channel* c) {
 }
 
 bool loadChannelsSettings () {
-  size_t size = _moduleConfig.getFileSize(SETTINGS_FILE);
+  size_t size = _domoticModule.getFileSize(SETTINGS_FILE);
   if (size > 0) {
     char buff[size];
-    _moduleConfig.loadFile(SETTINGS_FILE, buff, size);
+    _domoticModule.loadFile(SETTINGS_FILE, buff, size);
     DynamicJsonBuffer jsonBuffer;
     JsonObject& json = jsonBuffer.parseObject(buff);
     #ifdef LOGGING
@@ -283,7 +282,7 @@ void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
     updateCron(payload, length);
   } else if (String(topic).equals(getStationTopic("control"))) {
     changeState(payload, length);
-    _moduleConfig.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
+    _domoticModule.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
   } else {
     // Channels topics
     for (size_t i = 0; i < CHANNELS_COUNT; ++i) {
@@ -291,7 +290,7 @@ void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
         if (enableChannel(&_channels[i], payload, length)) {
           saveChannelsSettings();
         }
-        _moduleConfig.getMqttClient()->publish(getChannelTopic(&_channels[i], "state").c_str(), _channels[i].enabled ? "1" : "0");
+        _domoticModule.getMqttClient()->publish(getChannelTopic(&_channels[i], "state").c_str(), _channels[i].enabled ? "1" : "0");
       } else if (getChannelTopic(&_channels[i], "irrdur").equals(topic)) {
         if (updateChannelIrrigationDuration(&_channels[i], payload, length)) {
           saveChannelsSettings();
@@ -342,9 +341,9 @@ bool renameChannel(Channel* c, unsigned char* payload, unsigned int length) {
   bool renamed = !String(c->name).equals(String(newName));
   if (renamed) {
     log(F("Channel renamed"), newName);
-    _moduleConfig.getMqttClient()->unsubscribe(getChannelTopic(c, "+").c_str());
+    _domoticModule.getMqttClient()->unsubscribe(getChannelTopic(c, "+").c_str());
     c->updateName(newName);
-    _moduleConfig.getMqttClient()->subscribe(getChannelTopic(c, "+").c_str());
+    _domoticModule.getMqttClient()->subscribe(getChannelTopic(c, "+").c_str());
   }
   return renamed;
 }
@@ -456,9 +455,9 @@ bool changeState(unsigned char* payload, unsigned int length) {
 }
 
 String getChannelTopic (Channel *c, String cmd) {
-  return MODULE_TYPE + F("/") + _moduleConfig.getModuleLocation() + F("/") + _moduleConfig.getModuleName() + F("/") + c->name + F("/") + cmd;
+  return MODULE_TYPE + F("/") + _domoticModule.getModuleLocation() + F("/") + _domoticModule.getModuleName() + F("/") + c->name + F("/") + cmd;
 }
 
 String getStationTopic (String cmd) {
-  return MODULE_TYPE + F("/") + _moduleConfig.getModuleLocation() + F("/") + _moduleConfig.getModuleName() + F("/") + cmd;
+  return MODULE_TYPE + F("/") + _domoticModule.getModuleLocation() + F("/") + _domoticModule.getModuleName() + F("/") + cmd;
 }

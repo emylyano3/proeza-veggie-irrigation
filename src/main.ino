@@ -2,7 +2,7 @@
 #include <WiFiClient.h>
 #include <ESP8266WiFi.h>
 #include <ArduinoJson.h>
-#include <MQTTModule.h>
+#include <ESPDomotic.h>
 #include <time.h>
 
 extern "C" {
@@ -104,7 +104,7 @@ template <class T, class U> void log (T key, U value) {
   #endif
 }
 
-MQTTModule _domoticModule;
+ESPDomotic _domoticModule;
 
 void setup() {
   Serial.begin(115200);

@@ -209,16 +209,16 @@ void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
     for (size_t i = 0; i < _domoticModule.getChannelsCount(); ++i) {
       if (getChannelTopic(_domoticModule.getChannel(i), "enable").equals(topic)) {
         if (enableChannel(_domoticModule.getChannel(i), payload, length)) {
-          saveChannelsSettings();
+          _domoticModule.saveChannelsSettings();
         }
         _domoticModule.getMqttClient()->publish(getChannelTopic(_domoticModule.getChannel(i), "state").c_str(), _domoticModule.getChannel(i)->enabled ? "1" : "0");
       } else if (getChannelTopic(_domoticModule.getChannel(i), "timer").equals(topic)) {
         if (updateChannelTimer(_domoticModule.getChannel(i), payload, length)) {
-          saveChannelsSettings();
+          _domoticModule.saveChannelsSettings();
         }
       } else if (getChannelTopic(_domoticModule.getChannel(i), "rename").equals(topic)) {
         if (renameChannel(_domoticModule.getChannel(i), payload, length)) {
-          saveChannelsSettings();
+          _domoticModule.saveChannelsSettings();
         }
       }
     }
@@ -286,27 +286,6 @@ bool updateChannelTimer(Channel* c, uint8_t* payload, unsigned int length) {
   bool timerChanged = c->timer != (unsigned long) newTimer * 1000;
   c->timer = newTimer * 1000; // received in seconds set in millis
   return timerChanged;
-}
-
-void saveChannelsSettings () {
-  File file = SPIFFS.open(SETTINGS_FILE, "w");
-  if (file) {
-    DynamicJsonBuffer jsonBuffer;
-    JsonObject& json = jsonBuffer.createObject();
-    //TODO Trim param values
-    for (uint8_t i = 0; i < _domoticModule.getChannelsCount(); ++i) {
-      json[String(_domoticModule.getChannel(i)->id) + "_name"] = _domoticModule.getChannel(i)->name;
-      json[String(_domoticModule.getChannel(i)->id) + "_timer"] = _domoticModule.getChannel(i)->timer;
-      json[String(_domoticModule.getChannel(i)->id) + "_enabled"] = _domoticModule.getChannel(i)->enabled;
-    }
-    json.printTo(file);
-    log(F("Configuration file saved"));
-    json.printTo(Serial);
-    Serial.println();
-    file.close();
-  } else {
-    log(F("Failed to open config file for writing"));
-  }
 }
 
 void hardReset () {

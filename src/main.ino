@@ -18,7 +18,7 @@ const char*     _moduleType           = "irrigation";
 /* Irrigation control */
 char*           _irrCronExpression[]  = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
 bool            _irrigating           = false;
-uint8_t         _currChannel       = 0;
+uint8_t         _currChannel          = 0;
 unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD * 1000; // TIMER_CHECK_THRESHOLD is in seconds
 
 /* Channels control */
@@ -100,14 +100,14 @@ void checkIrrigation() {
         log(F("Irrigation sequence started"));
         _irrigating = true;
         _currChannel = 0;
-        _domoticModule.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
+        _domoticModule.getMqttClient()->publish(getStationTopic("state").c_str(), "1");
       }
     }
   } else {
     if (_currChannel >= _domoticModule.getChannelsCount()) {
       log(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
-      _domoticModule.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
+      _domoticModule.getMqttClient()->publish(getStationTopic("state").c_str(), "0");
     } else {
       if (!_domoticModule.getChannel(_currChannel)->isEnabled()) {
         log(F("Channel is disabled, going to next one."));
@@ -117,7 +117,7 @@ void checkIrrigation() {
           log(F("Starting channel"), _domoticModule.getChannel(_currChannel)->name);
           log(F("Channel timer (seconds)"), _domoticModule.getChannel(_currChannel)->timer / 1000);
           openValve(_domoticModule.getChannel(_currChannel));
-          _domoticModule.getChannel(_currChannel)->timerControl = millis() + _domoticModule.getChannel(_currChannel)->timer;
+          _domoticModule.getChannel(_currChannel)->updateTimerControl();
         } else {
            if (millis() > _domoticModule.getChannel(_currChannel)->timerControl) {
             log(F("Stoping channel"), _domoticModule.getChannel(_currChannel)->name);
@@ -283,8 +283,8 @@ bool updateChannelTimer(Channel* c, uint8_t* payload, unsigned int length) {
   log(F("New duration for channel"), c->name);
   long newTimer = String(buff).toInt();
   log(F("Duration"), newTimer);
-  bool timerChanged = c->timer != (unsigned long) newTimer * 1000;
-  c->timer = newTimer * 1000; // received in seconds set in millis
+  bool timerChanged = c->timer != (unsigned long) newTimer * 60 * 1000;
+  c->timer = newTimer * 60 * 1000; // received in seconds set in millis
   return timerChanged;
 }
 

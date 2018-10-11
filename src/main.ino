@@ -1,7 +1,4 @@
-#include <FS.h>
-#include <WiFiClient.h>
 #include <ESP8266WiFi.h>
-#include <ArduinoJson.h>
 #include <ESPDomotic.h>
 #include <time.h>
 
@@ -169,22 +166,12 @@ bool isTimeToIrrigate () {
 void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
   log(F("MQTT message on topic"), topic);
   // Station topics
-  if (String(topic).equals(_domoticModule.getStationTopic("hrst"))) {
-    hardReset();
-  } else if (String(topic).equals(_domoticModule.getStationTopic("cron"))) {
+  if (String(topic).equals(_domoticModule.getStationTopic("cron"))) {
     updateCron(payload, length);
   } else if (String(topic).equals(_domoticModule.getStationTopic("control"))) {
     changeState(payload, length);
     _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("state").c_str(), _irrigating ? "1" : "0");
   }
-}
-
-void hardReset () {
-  log(F("Doing a module hard reset"));
-  SPIFFS.format();
-  WiFi.disconnect();
-  delay(200);
-  ESP.restart();
 }
 
 void updateCron(unsigned char* payload, unsigned int length) {

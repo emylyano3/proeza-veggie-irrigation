@@ -3,8 +3,6 @@
 #include <time.h>
 
 /* Constants */
-const char          STATE_OFF         = '0';
-const char          STATE_ON          = '1';
 const char*         DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
 const char*         MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
 
@@ -17,18 +15,18 @@ unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD * 1000; // TIMER_
 /* Channels control */
 #ifdef NODEMCUV2
   // Id, Name, pin, state, timer 
-Channel _channelA ("A", "channel_A", D1, STATE_OFF, 60 * 1000, OUTPUT);
-Channel _channelB ("B", "channel_B", D2, STATE_OFF, 60 * 1000, OUTPUT);
-Channel _channelC ("C", "channel_C", D4, STATE_OFF, 60 * 1000, OUTPUT);
-Channel _channelD ("D", "channel_D", D5, STATE_OFF, 60 * 1000, OUTPUT);
+Channel _channelA ("A", "channel_A", D1, LOW, 60 * 1000, OUTPUT);
+Channel _channelB ("B", "channel_B", D2, LOW, 60 * 1000, OUTPUT);
+Channel _channelC ("C", "channel_C", D4, LOW, 60 * 1000, OUTPUT);
+Channel _channelD ("D", "channel_D", D5, LOW, 60 * 1000, OUTPUT);
 
 const uint8_t LED_PIN         = D7;
 // TODO Define pin consts un configuration file (ini file)
 #elif ESP12
-  Channel _channelA ("A", "channel_A", 1, STATE_OFF, 60 * 1000, OUTPUT);
-  Channel _channelB ("B", "channel_B", 2, STATE_OFF, 60 * 1000, OUTPUT);
-  Channel _channelC ("C", "channel_C", 3, STATE_OFF, 60 * 1000, OUTPUT);
-  Channel _channelD ("D", "channel_D", 4, STATE_OFF, 60 * 1000, OUTPUT);
+  Channel _channelA ("A", "channel_A", 1, LOW, 60 * 1000, OUTPUT);
+  Channel _channelB ("B", "channel_B", 2, LOW, 60 * 1000, OUTPUT);
+  Channel _channelC ("C", "channel_C", 3, LOW, 60 * 1000, OUTPUT);
+  Channel _channelD ("D", "channel_D", 4, LOW, 60 * 1000, OUTPUT);
 
 const uint8_t LED_PIN         = 5;
 #endif
@@ -105,7 +103,7 @@ void checkIrrigation() {
         log(F("Channel is disabled, going to next one."));
         ++_currChannel;
       } else {
-        if (_domoticModule.getChannel(_currChannel)->state == STATE_OFF) {
+        if (_domoticModule.getChannel(_currChannel)->state == LOW) {
           log(F("Starting channel"), _domoticModule.getChannel(_currChannel)->name);
           log(F("Channel timer (seconds)"), _domoticModule.getChannel(_currChannel)->timer / 1000);
           _domoticModule.openChannel(_domoticModule.getChannel(_currChannel));
@@ -209,7 +207,7 @@ bool changeState(unsigned char* payload, unsigned int length) {
     log(F("Invalid payload"));
   } else {
     switch (payload[0]) {
-      case STATE_OFF:
+      case LOW:
         if (_irrigating) {
           // Set irrigation end to 0 to simulate it should have ended 
           _domoticModule.getChannel(_currChannel)->timerControl = 0;
@@ -218,7 +216,7 @@ bool changeState(unsigned char* payload, unsigned int length) {
           log(F("Irrigation stopped"));
         }
         return true;
-      case STATE_ON:
+      case HIGH:
         if (!_irrigating) {
           _irrigating = true;
           _currChannel = 0;

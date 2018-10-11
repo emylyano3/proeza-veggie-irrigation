@@ -8,12 +8,8 @@
 /* Constants */
 const char          STATE_OFF         = '0';
 const char          STATE_ON          = '1';
-const char*         SETTINGS_FILE     = "/settings.json";
 const char*         DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
 const char*         MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
-
-/* Module settings */
-const char*     _moduleType           = "irrigation";
 
 /* Irrigation control */
 char*           _irrCronExpression[]  = {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]};
@@ -69,14 +65,13 @@ void setup() {
   _domoticModule.setFeedbackPin(LED_PIN);
   _domoticModule.setMqttConnectionCallback(mqttConnectionCallback);
   _domoticModule.setMqttMessageCallback(receiveMqttMessage);
-  _domoticModule.setModuleType(_moduleType);
+  _domoticModule.setModuleType("irrigation");
   _domoticModule.setDebugOutput(LOGGING);
   _domoticModule.addChannel(&_channelA);
   _domoticModule.addChannel(&_channelB);
   _domoticModule.addChannel(&_channelC);
   _domoticModule.addChannel(&_channelD);
   _domoticModule.init();
-
   log(F("Connected to wifi network. Local IP"), WiFi.localIP());
   configTime(TIMEZONE * 3600, 0, "br.pool.ntp.org", "cl.pool.ntp.org", "co.pool.ntp.org"); // brazil, chile, colombia
   log("Waiting for time...");
@@ -100,14 +95,14 @@ void checkIrrigation() {
         log(F("Irrigation sequence started"));
         _irrigating = true;
         _currChannel = 0;
-        _domoticModule.getMqttClient()->publish(getStationTopic("state").c_str(), "1");
+        _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("state").c_str(), "1");
       }
     }
   } else {
     if (_currChannel >= _domoticModule.getChannelsCount()) {
       log(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
-      _domoticModule.getMqttClient()->publish(getStationTopic("state").c_str(), "0");
+      _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("state").c_str(), "0");
     } else {
       if (!_domoticModule.getChannel(_currChannel)->isEnabled()) {
         log(F("Channel is disabled, going to next one."));
@@ -116,12 +111,12 @@ void checkIrrigation() {
         if (_domoticModule.getChannel(_currChannel)->state == STATE_OFF) {
           log(F("Starting channel"), _domoticModule.getChannel(_currChannel)->name);
           log(F("Channel timer (seconds)"), _domoticModule.getChannel(_currChannel)->timer / 1000);
-          openValve(_domoticModule.getChannel(_currChannel));
+          _domoticModule.openChannel(_domoticModule.getChannel(_currChannel));
           _domoticModule.getChannel(_currChannel)->updateTimerControl();
         } else {
            if (millis() > _domoticModule.getChannel(_currChannel)->timerControl) {
             log(F("Stoping channel"), _domoticModule.getChannel(_currChannel)->name);
-            closeValve(_domoticModule.getChannel(_currChannel++));
+            _domoticModule.closeChannel(_domoticModule.getChannel(_currChannel++));
             delay(CLOSE_VALVE_DELAY);
           }
         }
@@ -131,10 +126,7 @@ void checkIrrigation() {
 }
 
 void mqttConnectionCallback() {
-  _domoticModule.getMqttClient()->subscribe(getStationTopic("+").c_str());
-  for (size_t i = 0; i < _domoticModule.getChannelsCount(); ++i) {
-    _domoticModule.getMqttClient()->subscribe(getChannelTopic(_domoticModule.getChannel(i), "+").c_str());
-  }
+  _domoticModule.getMqttClient()->subscribe(_domoticModule.getStationTopic("+").c_str());
 }
 
 void updateCronExpression (const char* sec, const char* min, const char* hour, const char* dom, const char* mon, const char* dow) {
@@ -174,118 +166,17 @@ bool isTimeToIrrigate () {
   return timeToIrrigate;
 }
 
-void openValve(Channel* c) {
-  log(F("Opening valve of channel"), c->name);
-  if (c->state == STATE_ON) {
-    log(F("Valve already opened, skipping"));
-  } else {
-    digitalWrite(c->pin, LOW);
-    c->state = STATE_ON;
-  }
-}
-
-void closeValve(Channel* c) {
-  log(F("Closing valve of channel"), c->name);
-  if (c->state == STATE_OFF) {
-    log(F("Valve already closed, skipping"));
-  } else {
-    digitalWrite(c->pin, HIGH);
-    c->state = STATE_OFF;
-  }
-}
-
 void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
-  log(F("Received mqtt message topic"), topic);
+  log(F("MQTT message on topic"), topic);
   // Station topics
-  if (String(topic).equals(getStationTopic("hrst"))) {
+  if (String(topic).equals(_domoticModule.getStationTopic("hrst"))) {
     hardReset();
-  } else if (String(topic).equals(getStationTopic("cron"))) {
+  } else if (String(topic).equals(_domoticModule.getStationTopic("cron"))) {
     updateCron(payload, length);
-  } else if (String(topic).equals(getStationTopic("control"))) {
+  } else if (String(topic).equals(_domoticModule.getStationTopic("control"))) {
     changeState(payload, length);
-    _domoticModule.getMqttClient()->publish(getStationTopic("state").c_str(), _irrigating ? "1" : "0");
-  } else {
-    // Channels topics
-    for (size_t i = 0; i < _domoticModule.getChannelsCount(); ++i) {
-      if (getChannelTopic(_domoticModule.getChannel(i), "enable").equals(topic)) {
-        if (enableChannel(_domoticModule.getChannel(i), payload, length)) {
-          _domoticModule.saveChannelsSettings();
-        }
-        _domoticModule.getMqttClient()->publish(getChannelTopic(_domoticModule.getChannel(i), "state").c_str(), _domoticModule.getChannel(i)->enabled ? "1" : "0");
-      } else if (getChannelTopic(_domoticModule.getChannel(i), "timer").equals(topic)) {
-        if (updateChannelTimer(_domoticModule.getChannel(i), payload, length)) {
-          _domoticModule.saveChannelsSettings();
-        }
-      } else if (getChannelTopic(_domoticModule.getChannel(i), "rename").equals(topic)) {
-        if (renameChannel(_domoticModule.getChannel(i), payload, length)) {
-          _domoticModule.saveChannelsSettings();
-        }
-      }
-    }
+    _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("state").c_str(), _irrigating ? "1" : "0");
   }
-}
-
-bool enableChannel(Channel* c, unsigned char* payload, unsigned int length) {
-  log(F("Changing channel state"), c->name);
-  if (length != 1 || !payload) {
-    log(F("Invalid payload. Ignoring."));
-    return false;
-  }
-  bool stateChanged = false;
-  switch (payload[0]) {
-    case STATE_OFF:
-      stateChanged = c->enabled;
-      c->enabled = false;
-      break;
-    case STATE_ON:
-      stateChanged = !c->enabled;
-      c->enabled = true;
-      break;
-    default:
-      log(F("Invalid state"), payload[0]);
-      break;
-  }
-  return stateChanged;
-}
-
-bool renameChannel(Channel* c, uint8_t* payload, unsigned int length) {
-  log(F("Updating channel name"), c->name);
-  if (length < 1) {
-    log(F("Invalid payload"));
-    return false;
-  }
-  char newName[length + 1];
-  for (uint16_t i = 0 ; i < length; ++ i) {
-    newName[i] = payload[i];
-  }
-  newName[length] = '\0';
-  bool renamed = !String(c->name).equals(String(newName));
-  if (renamed) {
-    log(F("Channel renamed"), newName);
-    _domoticModule.getMqttClient()->unsubscribe(getChannelTopic(c, "+").c_str());
-    c->updateName(newName);
-    _domoticModule.getMqttClient()->subscribe(getChannelTopic(c, "+").c_str());
-  }
-  return renamed;
-}
-
-bool updateChannelTimer(Channel* c, uint8_t* payload, unsigned int length) {
-  log(F("Updating irrigation duration for channel"), c->name);
-  if (length < 1) {
-    log(F("Invalid payload"));
-    return false;
-  }
-  char buff[length + 1];
-  for (uint16_t i = 0 ; i < length; ++ i) {
-    buff[i] = payload[i];
-  }
-  buff[length] = '\0';
-  log(F("New duration for channel"), c->name);
-  long newTimer = String(buff).toInt();
-  log(F("Duration"), newTimer);
-  bool timerChanged = c->timer != (unsigned long) newTimer * 60 * 1000;
-  c->timer = newTimer * 60 * 1000; // received in seconds set in millis
-  return timerChanged;
 }
 
 void hardReset () {
@@ -335,7 +226,7 @@ bool changeState(unsigned char* payload, unsigned int length) {
         if (_irrigating) {
           // Set irrigation end to 0 to simulate it should have ended 
           _domoticModule.getChannel(_currChannel)->timerControl = 0;
-          closeValve(_domoticModule.getChannel(_currChannel));
+          _domoticModule.closeChannel(_domoticModule.getChannel(_currChannel));
           _irrigating = false;
           log(F("Irrigation stopped"));
         }
@@ -352,12 +243,4 @@ bool changeState(unsigned char* payload, unsigned int length) {
     }
   }
   return false;
-}
-
-String getChannelTopic (Channel *c, String cmd) {
-  return String(_moduleType) + F("/") + _domoticModule.getModuleLocation() + F("/") + _domoticModule.getModuleName() + F("/") + c->name + F("/") + cmd;
-}
-
-String getStationTopic (String cmd) {
-  return String(_moduleType) + F("/") + _domoticModule.getModuleLocation() + F("/") + _domoticModule.getModuleName() + F("/") + cmd;
 }

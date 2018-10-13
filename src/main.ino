@@ -90,14 +90,14 @@ void checkIrrigation() {
         log(F("Irrigation sequence started"));
         _irrigating = true;
         _currChannel = 0;
-        _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("state").c_str(), "1");
+        _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), "1");
       }
     }
   } else {
     if (_currChannel >= _domoticModule.getChannelsCount()) {
       log(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
-      _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("state").c_str(), "0");
+      _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), "0");
     } else {
       if (!_domoticModule.getChannel(_currChannel)->isEnabled()) {
         log(F("Channel is disabled, going to next one."));
@@ -121,7 +121,7 @@ void checkIrrigation() {
 }
 
 void mqttConnectionCallback() {
-  _domoticModule.getMqttClient()->subscribe(_domoticModule.getStationTopic("+").c_str());
+  // no additional action needed on mqtt client
 }
 
 void updateCronExpression (const char* sec, const char* min, const char* hour, const char* dom, const char* mon, const char* dow) {
@@ -164,11 +164,11 @@ bool isTimeToIrrigate () {
 void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
   log(F("MQTT message on topic"), topic);
   // Station topics
-  if (String(topic).equals(_domoticModule.getStationTopic("cron"))) {
+  if (String(topic).equals(_domoticModule.getStationTopic("command/cron"))) {
     updateCron(payload, length);
-  } else if (String(topic).equals(_domoticModule.getStationTopic("control"))) {
+  } else if (String(topic).equals(_domoticModule.getStationTopic("command/state"))) {
     changeState(payload, length);
-    _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("state").c_str(), _irrigating ? "1" : "0");
+    _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), _irrigating ? "1" : "0");
   }
 }
 
@@ -207,7 +207,7 @@ bool changeState(unsigned char* payload, unsigned int length) {
     log(F("Invalid payload"));
   } else {
     switch (payload[0]) {
-      case LOW:
+      case '0':
         if (_irrigating) {
           // Set irrigation end to 0 to simulate it should have ended 
           _domoticModule.getChannel(_currChannel)->timerControl = 0;
@@ -216,7 +216,7 @@ bool changeState(unsigned char* payload, unsigned int length) {
           log(F("Irrigation stopped"));
         }
         return true;
-      case HIGH:
+      case '1':
         if (!_irrigating) {
           _irrigating = true;
           _currChannel = 0;

@@ -15,18 +15,18 @@ unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD * 1000; // TIMER_
 /* Channels control */
 #ifdef NODEMCUV2
   // Id, Name, pin, state, timer 
-Channel _channelA ("A", "channel_A", D1, LOW, 60 * 1000, OUTPUT);
-Channel _channelB ("B", "channel_B", D2, LOW, 60 * 1000, OUTPUT);
-Channel _channelC ("C", "channel_C", D4, LOW, 60 * 1000, OUTPUT);
-Channel _channelD ("D", "channel_D", D5, LOW, 60 * 1000, OUTPUT);
+Channel _channelA ("A", "channel_A", D1, OUTPUT, HIGH, 60 * 1000);
+Channel _channelB ("B", "channel_B", D2, OUTPUT, HIGH, 60 * 1000);
+Channel _channelC ("C", "channel_C", D4, OUTPUT, HIGH, 60 * 1000);
+Channel _channelD ("D", "channel_D", D5, OUTPUT, HIGH, 60 * 1000);
 
 const uint8_t LED_PIN         = D7;
 // TODO Define pin consts un configuration file (ini file)
 #elif ESP12
-  Channel _channelA ("A", "channel_A", 1, LOW, 60 * 1000, OUTPUT);
-  Channel _channelB ("B", "channel_B", 2, LOW, 60 * 1000, OUTPUT);
-  Channel _channelC ("C", "channel_C", 3, LOW, 60 * 1000, OUTPUT);
-  Channel _channelD ("D", "channel_D", 4, LOW, 60 * 1000, OUTPUT);
+  Channel _channelA ("A", "channel_A", 1, OUTPUT, HIGH, 60 * 1000);
+  Channel _channelB ("B", "channel_B", 2, OUTPUT, HIGH, 60 * 1000);
+  Channel _channelC ("C", "channel_C", 3, OUTPUT, HIGH, 60 * 1000);
+  Channel _channelD ("D", "channel_D", 4, OUTPUT, HIGH, 60 * 1000);
 
 const uint8_t LED_PIN         = 5;
 #endif
@@ -61,7 +61,6 @@ void setup() {
   _domoticModule.setMqttConnectionCallback(mqttConnectionCallback);
   _domoticModule.setMqttMessageCallback(receiveMqttMessage);
   _domoticModule.setModuleType("irrigation");
-  _domoticModule.setDebugOutput(LOGGING);
   _domoticModule.addChannel(&_channelA);
   _domoticModule.addChannel(&_channelB);
   _domoticModule.addChannel(&_channelC);
@@ -94,23 +93,24 @@ void checkIrrigation() {
       }
     }
   } else {
+    Channel *channel = _domoticModule.getChannel(_currChannel);
     if (_currChannel >= _domoticModule.getChannelsCount()) {
       log(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
       _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), "0");
     } else {
-      if (!_domoticModule.getChannel(_currChannel)->isEnabled()) {
-        log(F("Channel is disabled, going to next one."));
+      if (!channel->isEnabled()) {
+        log(F("Channel is disabled, going to next one."), channel->name);
         ++_currChannel;
       } else {
-        if (_domoticModule.getChannel(_currChannel)->state == LOW) {
-          log(F("Starting channel"), _domoticModule.getChannel(_currChannel)->name);
-          log(F("Channel timer (seconds)"), _domoticModule.getChannel(_currChannel)->timer / 1000);
-          _domoticModule.openChannel(_domoticModule.getChannel(_currChannel));
-          _domoticModule.getChannel(_currChannel)->updateTimerControl();
-        } else {
-           if (millis() > _domoticModule.getChannel(_currChannel)->timerControl) {
-            log(F("Stoping channel"), _domoticModule.getChannel(_currChannel)->name);
+        if (channel->state == HIGH) {
+          log(F("Starting channel"), channel->name);
+          log(F("Channel timer (seconds)"), channel->timer / 1000);
+          _domoticModule.openChannel(channel);
+          channel->updateTimerControl();
+        } else { //LOW
+           if (millis() > channel->timerControl) {
+            log(F("Stoping channel"), channel->name);
             _domoticModule.closeChannel(_domoticModule.getChannel(_currChannel++));
             delay(CLOSE_VALVE_DELAY);
           }
@@ -210,8 +210,9 @@ bool changeState(unsigned char* payload, unsigned int length) {
       case '0':
         if (_irrigating) {
           // Set irrigation end to 0 to simulate it should have ended 
-          _domoticModule.getChannel(_currChannel)->timerControl = 0;
-          _domoticModule.closeChannel(_domoticModule.getChannel(_currChannel));
+          Channel *channel = _domoticModule.getChannel(_currChannel);
+          channel->timerControl = 0;
+          _domoticModule.closeChannel(channel);
           _irrigating = false;
           log(F("Irrigation stopped"));
         }

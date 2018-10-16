@@ -52,7 +52,6 @@ template <class T, class U> void log (T key, U value) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  pinMode(LED_PIN, OUTPUT);
   Serial.println();
   log("Starting module");
   String ssid = "Proeza irrigation " + String(ESP.getChipId());

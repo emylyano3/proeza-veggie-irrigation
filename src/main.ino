@@ -92,12 +92,12 @@ void checkIrrigation() {
       }
     }
   } else {
-    Channel *channel = _domoticModule.getChannel(_currChannel);
     if (_currChannel >= _domoticModule.getChannelsCount()) {
       log(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
       _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), "0");
     } else {
+      Channel *channel = _domoticModule.getChannel(_currChannel);
       if (!channel->isEnabled()) {
         log(F("Channel is disabled, going to next one."), channel->name);
         ++_currChannel;
@@ -146,8 +146,7 @@ bool isTimeToIrrigate () {
   log(F("Checking if is time to start irrigation"));
   time_t now = time(nullptr);
   Serial.printf("Current time: %s", ctime(&now));
-  struct tm * ptm;
-  ptm = gmtime(&now);
+  struct tm * ptm = gmtime(&now);
   String dow = ptm->tm_wday < 7 ? String(DAYS_OF_WEEK[ptm->tm_wday]): "";
   String mon = ptm->tm_mon < 12 ? String(MONTHS_OF_YEAR[ptm->tm_mon]): "";
   // Evaluates cron at minute level. Seconds granularity is not needed for irrigarion scheduling.

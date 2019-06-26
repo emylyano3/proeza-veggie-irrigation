@@ -2,6 +2,16 @@
 #include <ESPDomotic.h>
 #include <time.h>
 
+void checkIrrigation();
+void mqttConnectionCallback();
+void updateCronExpression (const char* sec, const char* min, const char* hour, const char* dom, const char* mon, const char* dow);
+void updateCronExpressionChunk(const char* a, uint8_t index);
+bool isTimeToCheckSchedule ();
+bool isTimeToIrrigate ();
+void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length);
+void updateCron(unsigned char* payload, unsigned int length);
+bool changeState(unsigned char* payload, unsigned int length);
+
 /* Constants */
 const char*         DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
 const char*         MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};

@@ -33,12 +33,12 @@ Channel _channelD ("D", "channel_D", D5, OUTPUT, HIGH, 60 * 1000);
 const uint8_t LED_PIN         = D7;
 // TODO Define pin consts un configuration file (ini file)
 #elif ESP12
-  Channel _channelA ("A", "channel_A", 1, OUTPUT, HIGH, 60 * 1000);
-  Channel _channelB ("B", "channel_B", 2, OUTPUT, HIGH, 60 * 1000);
-  Channel _channelC ("C", "channel_C", 3, OUTPUT, HIGH, 60 * 1000);
-  Channel _channelD ("D", "channel_D", 4, OUTPUT, HIGH, 60 * 1000);
+  Channel _channelA ("A", "channel_A", 5, OUTPUT, HIGH, 60 * 1000);
+  Channel _channelB ("B", "channel_B", 4, OUTPUT, HIGH, 60 * 1000);
+  Channel _channelC ("C", "channel_C", 2, OUTPUT, HIGH, 60 * 1000);
+  Channel _channelD ("D", "channel_D", 16, OUTPUT, HIGH, 60 * 1000);
 
-const uint8_t LED_PIN         = 5;
+const uint8_t LED_PIN         = 13;
 #endif
 
 ESPDomotic _domoticModule;

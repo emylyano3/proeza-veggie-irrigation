@@ -165,7 +165,7 @@ bool isTimeToIrrigate () {
   timeToIrrigate &= String(_irrCronExpression[4]).equals("*") || String(_irrCronExpression[4]).equalsIgnoreCase(mon) || String(_irrCronExpression[4]).equals(String(ptm->tm_mon + 1)); // Month
   timeToIrrigate &= String(_irrCronExpression[3]).equals("*") || String(_irrCronExpression[3]).equals(String(ptm->tm_mday)); // Day of month
   timeToIrrigate &= String(_irrCronExpression[2]).equals("*") || String(_irrCronExpression[2]).equals(String(ptm->tm_hour)); // Hour
-  timeToIrrigate &= String(_irrCronExpression[1]).equals("*") || String(_irrCronExpression[1]).toInt() == ptm->tm_min || (String(_irrCronExpression[1]).toInt() > ptm->tm_min && String(_irrCronExpression[1]).toInt() - TIMER_CHECK_THRESHOLD < ptm->tm_min); // Minute
+  timeToIrrigate &= String(_irrCronExpression[1]).equals("*") || String(_irrCronExpression[1]).toInt() == ptm->tm_min || (ptm->tm_min > String(_irrCronExpression[1]).toInt() && ptm->tm_min - (TIMER_CHECK_THRESHOLD / 60) <= String(_irrCronExpression[1]).toInt()); // Minute
   return timeToIrrigate;
 }
 

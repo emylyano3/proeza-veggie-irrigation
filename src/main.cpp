@@ -25,18 +25,18 @@ unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD * 1000; // TIMER_
 /* Channels control */
 #ifdef NODEMCUV2
   // Id, Name, pin, state, timer 
-Channel _channelA ("A", "channel_A", D1, OUTPUT, HIGH, 60 * 1000);
-Channel _channelB ("B", "channel_B", D2, OUTPUT, HIGH, 60 * 1000);
-Channel _channelC ("C", "channel_C", D4, OUTPUT, HIGH, 60 * 1000);
-Channel _channelD ("D", "channel_D", D5, OUTPUT, HIGH, 60 * 1000);
+Channel _channelA ("A", "channel_A", D1, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
+Channel _channelB ("B", "channel_B", D2, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
+Channel _channelC ("C", "channel_C", D4, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
+Channel _channelD ("D", "channel_D", D5, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
 
 const uint8_t LED_PIN         = D7;
 // TODO Define pin consts un configuration file (ini file)
 #elif ESP12
-  Channel _channelA ("A", "channel_A", 2, OUTPUT, HIGH, 60 * 1000);
-  Channel _channelB ("B", "channel_B", 4, OUTPUT, HIGH, 60 * 1000);
-  Channel _channelC ("C", "channel_C", 5, OUTPUT, HIGH, 60 * 1000);
-  Channel _channelD ("D", "channel_D", 16, OUTPUT, HIGH, 60 * 1000);
+  Channel _channelA ("A", "channel_A", 2, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
+  Channel _channelB ("B", "channel_B", 4, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
+  Channel _channelC ("C", "channel_C", 5, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
+  Channel _channelD ("D", "channel_D", 16, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
 
 const uint8_t LED_PIN         = 13;
 #endif

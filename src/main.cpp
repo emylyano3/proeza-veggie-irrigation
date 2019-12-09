@@ -10,7 +10,7 @@ bool isTimeToCheckSchedule ();
 bool isTimeToIrrigate ();
 void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length);
 void updateCron(unsigned char* payload, unsigned int length);
-bool changeState(unsigned char* payload, unsigned int length);
+bool changeStateCommand(unsigned char* payload, unsigned int length);
 
 /* Constants */
 const char*         DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
@@ -113,14 +113,13 @@ void checkIrrigation() {
         ++_currChannel;
       } else {
         if (channel->state == HIGH) {
-          log(F("Starting channel"), channel->name);
-          log(F("Channel timer (seconds)"), channel->timer / 1000);
-          _domoticModule.openChannel(channel);
-          channel->updateTimerControl();
-        } else { //LOW
-           if (millis() > channel->timerControl) {
-            log(F("Stoping channel"), channel->name);
-            _domoticModule.closeChannel(_domoticModule.getChannel(_currChannel++));
+          log(F("Openning channel"), channel->name);
+          _domoticModule.updateChannelState(channel, LOW);
+        } else {
+           if (channel->timeIsUp()) {
+            log(F("Closing channel"), channel->name);
+            _domoticModule.updateChannelState(channel, HIGH);
+            _currChannel++;
             delay(CLOSE_VALVE_DELAY);
           }
         }
@@ -175,7 +174,7 @@ void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
   if (String(topic).equals(_domoticModule.getStationTopic("command/cron"))) {
     updateCron(payload, length);
   } else if (String(topic).equals(_domoticModule.getStationTopic("command/state"))) {
-    changeState(payload, length);
+    changeStateCommand(payload, length);
     _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), _irrigating ? "1" : "0");
   }
 }
@@ -210,7 +209,7 @@ void updateCron(unsigned char* payload, unsigned int length) {
   #endif
 }
 
-bool changeState(unsigned char* payload, unsigned int length) {
+bool changeStateCommand(unsigned char* payload, unsigned int length) {
   if (length != 1) {
     log(F("Invalid payload"));
   } else {
@@ -219,8 +218,7 @@ bool changeState(unsigned char* payload, unsigned int length) {
         if (_irrigating) {
           // Set irrigation end to 0 to simulate it should have ended 
           Channel *channel = _domoticModule.getChannel(_currChannel);
-          channel->timerControl = 0;
-          _domoticModule.closeChannel(channel);
+          _domoticModule.updateChannelState(channel, HIGH);
           _irrigating = false;
           log(F("Irrigation stopped"));
         }

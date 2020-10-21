@@ -15,7 +15,7 @@ bool isTimeToIrrigate ();
 void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length);
 void mqttConnectionCallback();
 bool changeStateCommand(unsigned char* payload, unsigned int length);
-char* mqttPayloadToString (uint8_t* payload, unsigned int length);
+char* mqttPayloadToString (uint8_t* payload, unsigned int length, char* buff);
 
 /* Constants */
 const char*         DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
@@ -57,15 +57,19 @@ const uint8_t LED_PIN         = 13;
 ESPDomotic _domoticModule;
 
 template <class T> void log (T text) {
+  #ifdef LOGGING
   Serial.print("*IRR: ");
   Serial.println(text);
+  #endif
 }
 
 template <class T, class U> void log (T key, U value) {
+  #ifdef LOGGING
   Serial.print("*IRR: ");
   Serial.print(key);
   Serial.print(": ");
   Serial.println(value);
+  #endif
 }
 
 void setup() {
@@ -149,7 +153,7 @@ void setCron(uint8_t cronNo, char* payload) {
 
 void setCronExpressionChunk(uint8_t cronNo, uint8_t index, const char* value) {
   String sChunk = String(value);
-  log("Updating cron chunk", String(sChunk));
+  log("Setting cron chunk", String(sChunk));
   sChunk.toCharArray(_irrCronExpression[cronNo][index], 4);
 }
 
@@ -158,14 +162,14 @@ void updateCron(uint8_t cronNo, unsigned char* payload, unsigned int length) {
   if (length < 11) {
     log(F("Invalid payload"));
   } else {
-    char* cronConf = mqttPayloadToString(payload, length);
+    char cronConf[length + 1];
+    mqttPayloadToString(payload, length, cronConf);
     setCron(cronNo, cronConf);
     if (_domoticModule.updateConf(CRONS_CONF[cronNo], cronConf)) {
       log("Cron conf persisted OK");
     } else {
       log("Cron conf not saved");
     }
-    delete[] cronConf;
     #ifndef LOGGING
     Serial.print("New cron expression: ");
     for (int i = 0; i < 6; ++i) {
@@ -177,17 +181,16 @@ void updateCron(uint8_t cronNo, unsigned char* payload, unsigned int length) {
   }
 }
 
-char* mqttPayloadToString (uint8_t* payload, unsigned int length) {
-  char* aux = new char[length + 1];
-  log("Payload debug. Length", length);
+char* mqttPayloadToString (uint8_t* payload, unsigned int length, char* buff) {
+  log("MQTT payload to string. Length", length);
   for (unsigned int i = 0; i < length; ++i) {
-    aux[i] = payload[i];
+    buff[i] = payload[i];
     Serial.print(payload[i]);
   }
   Serial.println();
-  aux[length] = '\0';
-  log("Payload converted", aux);
-  return aux;
+  buff[length] = '\0';
+  log("Payload converted", buff);
+  return buff;
 }
 
 void checkIrrigation() {
@@ -245,32 +248,31 @@ bool isTimeToIrrigate () {
   String dow = ptm->tm_wday < 7 ? String(DAYS_OF_WEEK[ptm->tm_wday]): "";
   String mon = ptm->tm_mon < 12 ? String(MONTHS_OF_YEAR[ptm->tm_mon]): "";
   // Evaluates cron at minute level. Seconds granularity is not needed for irrigarion scheduling.
-  boolean timeToIrrigate = true;
+  boolean timeToIrrigate;
   uint8_t cronNo = 0;
   do {
-    log("Checking cron", cronNo);
-
     timeToIrrigate = true;
-    timeToIrrigate &= String(_irrCronExpression[cronNo][1]).equals("*") || String(_irrCronExpression[cronNo][1]).toInt() == ptm->tm_min || (ptm->tm_min > String(_irrCronExpression[cronNo][1]).toInt() && ptm->tm_min - (TIMER_CHECK_THRESHOLD / 60) <= String(_irrCronExpression[cronNo][1]).toInt()); // Minute
-    log("chunk min", String(_irrCronExpression[cronNo][1]));
-    log("time min", String(ptm->tm_min));
-    log("coincide min", String(_irrCronExpression[cronNo][1]).equals(String(ptm->tm_min)));
-    timeToIrrigate &= String(_irrCronExpression[cronNo][2]).equals("*") || String(_irrCronExpression[cronNo][2]).equals(String(ptm->tm_hour)); // Hour
-    log("chunk hour", String(_irrCronExpression[cronNo][2]));
-    log("time hour", String(ptm->tm_hour));
-    log("coincide hour", String(_irrCronExpression[cronNo][2]).equals(String(ptm->tm_hour)));
-    timeToIrrigate &= String(_irrCronExpression[cronNo][3]).equals("*") || String(_irrCronExpression[cronNo][3]).equals(String(ptm->tm_mday)); // Day of month
-    log("chunk dom", String(_irrCronExpression[cronNo][3]));
-    log("coincide dom", String(_irrCronExpression[cronNo][3]).equals("*"));
-    timeToIrrigate &= String(_irrCronExpression[cronNo][4]).equalsIgnoreCase("*") || String(_irrCronExpression[cronNo][4]).equalsIgnoreCase(mon) || String(_irrCronExpression[cronNo][4]).equals(String(ptm->tm_mon + 1)); // Month
-    log("chunk mon", String(_irrCronExpression[cronNo][4]));
-    log("coincide mon", String(_irrCronExpression[cronNo][4]).equals("*"));
-    timeToIrrigate &= String(_irrCronExpression[cronNo][5]).equalsIgnoreCase("?") || String(_irrCronExpression[cronNo][5]).equalsIgnoreCase(dow) || String(_irrCronExpression[cronNo][5]).equals(String(ptm->tm_wday + 1)); // Day of week
-    log("chunk dow", String(_irrCronExpression[cronNo][5]));
-    log("coincide dow", String(_irrCronExpression[cronNo][5]).equals("?"));
+    timeToIrrigate &= _irrCronExpression[cronNo][1][0] == '*' 
+                      || atoi(_irrCronExpression[cronNo][1]) == ptm->tm_min 
+                      || (  
+                          ptm->tm_min > atoi(_irrCronExpression[cronNo][1]) 
+                          && 
+                          ptm->tm_min - (TIMER_CHECK_THRESHOLD / 60) <= atoi(_irrCronExpression[cronNo][1])
+                        ); // Minute
+    timeToIrrigate &= _irrCronExpression[cronNo][2][0] == '*' 
+                      || atoi(_irrCronExpression[cronNo][2]) == ptm->tm_hour; // Hour
+    timeToIrrigate &= _irrCronExpression[cronNo][3][0] == '*' 
+                      || atoi(_irrCronExpression[cronNo][3]) == ptm->tm_mday; // Day of month
+    timeToIrrigate &= _irrCronExpression[cronNo][4][0] == '*' 
+                      || String(_irrCronExpression[cronNo][4]).equalsIgnoreCase(mon) 
+                      || atoi(_irrCronExpression[cronNo][4]) == ptm->tm_mon + 1; // Month
+    timeToIrrigate &= _irrCronExpression[cronNo][5][0] == '?'
+                      || String(_irrCronExpression[cronNo][5]).equalsIgnoreCase(dow) 
+                      || atoi(_irrCronExpression[cronNo][5]) == ptm->tm_wday + 1; // Day of week
+    log("Checking cron", cronNo);
     ++cronNo;
   } while (!timeToIrrigate && cronNo < MAX_CRONS);
-  log("TTI", timeToIrrigate);
+  log("IS TTI", timeToIrrigate);
   return timeToIrrigate;
 }
 

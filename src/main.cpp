@@ -76,7 +76,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
-  log("Starting module");
+  log(F("Starting module"));
   String ssid = "Proeza irrigation " + String(ESP.getChipId());
   _domoticModule.setPortalSSID(ssid.c_str());
   _domoticModule.setFeedbackPin(LED_PIN);
@@ -93,7 +93,7 @@ void setup() {
   _domoticModule.init();
   log(F("Connected to wifi network. Local IP"), WiFi.localIP());
   configTime(TIMEZONE * 3600, 0, "ar.pool.ntp.org", "br.pool.ntp.org", "cl.pool.ntp.org"); // argentina, brazil, chile
-  log("Waiting for time...");
+  log(F("Waiting for time..."));
   time_t now;
   while (!(now = time(nullptr))) {
     delay(500);
@@ -109,21 +109,21 @@ void loop() {
 }
 
 void initializeScheduling () {
-  log("Initializing scheduling");
+  log(F("Initializing scheduling"));
   for (uint8_t cronNo = 0; cronNo < MAX_CRONS; ++cronNo) {
     loadCronConf(cronNo);
   }
 }
 
 void loadCronConf(uint8_t cronNo) {
-  log("Getting configuration for cron number", cronNo);
+  log(F("Getting configuration for cron number"), cronNo);
   char* conf = _domoticModule.getConf(CRONS_CONF[cronNo]);
   if (conf) {
-    log("Cron conf loaded", conf);
+    log(F("Cron conf loaded"), conf);
     setCron(cronNo, conf);
     delete[] conf;
   } else { 
-    log("Conf not found for cron number", cronNo);
+    log(F("Conf not found for cron number"), cronNo);
     setCronExpressionChunk(cronNo, 0, "0");
     setCronExpressionChunk(cronNo, 1, "0");
     setCronExpressionChunk(cronNo, 2, "4");
@@ -152,9 +152,8 @@ void setCron(uint8_t cronNo, char* payload) {
 }
 
 void setCronExpressionChunk(uint8_t cronNo, uint8_t index, const char* value) {
-  String sChunk = String(value);
-  log("Setting cron chunk", String(sChunk));
-  sChunk.toCharArray(_irrCronExpression[cronNo][index], 4);
+  log(F("Setting cron chunk"), value);
+  String(value).toCharArray(_irrCronExpression[cronNo][index], 4);
 }
 
 void updateCron(uint8_t cronNo, unsigned char* payload, unsigned int length) {
@@ -166,9 +165,9 @@ void updateCron(uint8_t cronNo, unsigned char* payload, unsigned int length) {
     mqttPayloadToString(payload, length, cronConf);
     setCron(cronNo, cronConf);
     if (_domoticModule.updateConf(CRONS_CONF[cronNo], cronConf)) {
-      log("Cron conf persisted OK");
+      log(F("Cron conf persisted OK"));
     } else {
-      log("Cron conf not saved");
+      log(F("Cron conf not saved"));
     }
     #ifndef LOGGING
     Serial.print("New cron expression: ");
@@ -182,14 +181,14 @@ void updateCron(uint8_t cronNo, unsigned char* payload, unsigned int length) {
 }
 
 char* mqttPayloadToString (uint8_t* payload, unsigned int length, char* buff) {
-  log("MQTT payload to string. Length", length);
+  log(F("MQTT payload to string. Length"), length);
   for (unsigned int i = 0; i < length; ++i) {
     buff[i] = payload[i];
     Serial.print(payload[i]);
   }
   Serial.println();
   buff[length] = '\0';
-  log("Payload converted", buff);
+  log(F("Payload converted"), buff);
   return buff;
 }
 
@@ -248,32 +247,32 @@ bool isTimeToIrrigate () {
   String dow = ptm->tm_wday < 7 ? String(DAYS_OF_WEEK[ptm->tm_wday]): "";
   String mon = ptm->tm_mon < 12 ? String(MONTHS_OF_YEAR[ptm->tm_mon]): "";
   // Evaluates cron at minute level. Seconds granularity is not needed for irrigarion scheduling.
-  boolean timeToIrrigate;
+  boolean tti;
   uint8_t cronNo = 0;
   do {
-    timeToIrrigate = true;
-    timeToIrrigate &= _irrCronExpression[cronNo][1][0] == '*' 
+    tti = true;
+    tti &= _irrCronExpression[cronNo][1][0] == '*' 
                       || atoi(_irrCronExpression[cronNo][1]) == ptm->tm_min 
                       || (  
                           ptm->tm_min > atoi(_irrCronExpression[cronNo][1]) 
                           && 
                           ptm->tm_min - (TIMER_CHECK_THRESHOLD / 60) <= atoi(_irrCronExpression[cronNo][1])
                         ); // Minute
-    timeToIrrigate &= _irrCronExpression[cronNo][2][0] == '*' 
+    tti &= _irrCronExpression[cronNo][2][0] == '*' 
                       || atoi(_irrCronExpression[cronNo][2]) == ptm->tm_hour; // Hour
-    timeToIrrigate &= _irrCronExpression[cronNo][3][0] == '*' 
+    tti &= _irrCronExpression[cronNo][3][0] == '*' 
                       || atoi(_irrCronExpression[cronNo][3]) == ptm->tm_mday; // Day of month
-    timeToIrrigate &= _irrCronExpression[cronNo][4][0] == '*' 
+    tti &= _irrCronExpression[cronNo][4][0] == '*' 
                       || String(_irrCronExpression[cronNo][4]).equalsIgnoreCase(mon) 
                       || atoi(_irrCronExpression[cronNo][4]) == ptm->tm_mon + 1; // Month
-    timeToIrrigate &= _irrCronExpression[cronNo][5][0] == '?'
+    tti &= _irrCronExpression[cronNo][5][0] == '?'
                       || String(_irrCronExpression[cronNo][5]).equalsIgnoreCase(dow) 
                       || atoi(_irrCronExpression[cronNo][5]) == ptm->tm_wday + 1; // Day of week
-    log("Checking cron", cronNo);
+    log(F("Checking cron"), cronNo);
     ++cronNo;
-  } while (!timeToIrrigate && cronNo < MAX_CRONS);
-  log("IS TTI", timeToIrrigate);
-  return timeToIrrigate;
+  } while (!tti && cronNo < MAX_CRONS);
+  log(F("IS TTI?"), tti);
+  return tti;
 }
 
 void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
@@ -287,7 +286,7 @@ void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
     changeStateCommand(payload, length);
     _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), _irrigating ? "1" : "0");
   } else {
-    log("Unknown topic");
+    log(F("Unknown topic"));
   }
 }
 

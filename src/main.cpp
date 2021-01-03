@@ -2,6 +2,7 @@
 #include <ESPDomotic.h>
 #include <time.h>
 #include <string>
+#include <sstream>
 
 /*
 HEAP Improvement https://learn.adafruit.com/memories-of-an-arduino/optimizing-sram
@@ -82,8 +83,9 @@ void setup() {
   delay(500);
   Serial.println();
   debug(F("Starting module"));
-  std::string chipid = "" + ESP.getChipId();
-  std::string chipname = "Proeza irrigation " + chipid;
+  std::ostringstream s;
+  s << "Proeza irrigation " << ESP.getChipId();
+  std::string chipname(s.str());
   _domoticModule.setPortalSSID(chipname.c_str());
   _domoticModule.setFeedbackPin(LED_PIN);
   _domoticModule.setMqttMessageCallback(receiveMqttMessage);
@@ -299,6 +301,6 @@ bool isTimeToIrrigate () {
     debug(F("Checking cron"), cronNo);
     ++cronNo;
   } while (!tti && cronNo < MAX_CRONS);
-  debug(F("IS TTI?"), tti);
+  debug(F("IS TTI?"), tti ? "YES" : "NO");
   return tti;
 }

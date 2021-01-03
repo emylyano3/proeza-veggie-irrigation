@@ -3,14 +3,12 @@
 #include <time.h>
 #include <string>
 
-using namespace std;
-
 void setup();
 void loop();
 void initializeScheduling();
 bool saveCronConf(uint8_t cronNo);
 void loadCronConf(uint8_t cronNo);
-void updateCronFieldConf(uint8_t cronNo, uint8_t index, const char* value);
+void updateCronField(uint8_t cronNo, uint8_t index, const char* value);
 void checkIrrigation();
 bool isTimeToCheckSchedule ();
 bool isTimeToIrrigate ();
@@ -155,10 +153,10 @@ void checkIrrigation() {
 void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length) {
   debug(F("MQTT message on topic"), topic);
   // Station topic
-  string receivedTopic = string(topic);
-  if (receivedTopic.find(_domoticModule.getStationTopic("command/cron/").c_str()) != string::npos) {
+  std::string receivedTopic = std::string(topic);
+  if (receivedTopic.find(_domoticModule.getStationTopic("command/cron/").c_str()) != std::string::npos) {
     updateCronCommand(topic, payload, length);
-  } else if (receivedTopic.find(_domoticModule.getStationTopic("command/state").c_str()) != string::npos) {
+  } else if (receivedTopic.find(_domoticModule.getStationTopic("command/state").c_str()) != std::string::npos) {
     changeStateCommand(topic, payload, length);
     _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), _irrigating ? "1" : "0");
   } else {
@@ -167,12 +165,16 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
 }
 
 void updateCronCommand (char* topic, unsigned char* payload, unsigned int length) {
-  string tail = string(topic).substr(_domoticModule.getStationTopic("command/cron/").length());
-  string cronNo = tail.substr(0, tail.find("/"));
-  string fieldNo = tail.substr(tail.find("/") + 1);
-  payload[length] = '\0';
-  updateCronFieldConf(atoi(cronNo.c_str()), atoi(fieldNo.c_str()), (char*)payload);
-  saveCronConf(atoi(cronNo.c_str()));
+  std::string tail = std::string(topic).substr(_domoticModule.getStationTopic("command/cron/").length());
+  size_t cronID = atoi(tail.substr(0, tail.find("/")).c_str());
+  size_t fieldID = atoi(tail.substr(tail.find("/") + 1).c_str());
+  char value[length + 1];
+  strcpy(value, (char*) payload);
+  value[length] = '\0'; // to treat payload as string
+  updateCronField(cronID, fieldID, value);
+  saveCronConf(cronID);
+  String feedbackTopic = _domoticModule.getStationTopic("feedback/cron/") + tail.c_str();
+  _domoticModule.getMqttClient()->publish(feedbackTopic.c_str(), value);
 }
 
 void loadCronConf(uint8_t cronNo) {
@@ -189,28 +191,28 @@ void loadCronConf(uint8_t cronNo) {
         int j = 0;
         while (i < length && conf[i] != ' ' && j < CRON_FIELD_SIZE) 
           value[j++] = conf[i++];
-        updateCronFieldConf(cronNo, chunkNo++, value);
+        updateCronField(cronNo, chunkNo++, value);
       }
     }
     delete[] conf;
   } else { 
     debug(F("Conf not found for cron number"), cronNo, F(". Setting defaults"));
-    updateCronFieldConf(cronNo, 0, "0");
-    updateCronFieldConf(cronNo, 1, "0");
-    updateCronFieldConf(cronNo, 2, "6");
-    updateCronFieldConf(cronNo, 3, "*");
-    updateCronFieldConf(cronNo, 4, "*");
-    updateCronFieldConf(cronNo, 5, "?");
+    updateCronField(cronNo, 0, "0");
+    updateCronField(cronNo, 1, "0");
+    updateCronField(cronNo, 2, "6");
+    updateCronField(cronNo, 3, "*");
+    updateCronField(cronNo, 4, "*");
+    updateCronField(cronNo, 5, "?");
   }
 }
 
-void updateCronFieldConf(uint8_t cronNo, uint8_t fieldNo, const char* value) {
-  debug(F("Updating cron ["), cronNo, F("] field ["), CRON_FIELDS_NAMES[fieldNo], F("] with value"), value);
-  String(value).toCharArray(_irrCronExpressions[cronNo][fieldNo], CRON_FIELD_SIZE);
+void updateCronField(uint8_t cronNo, uint8_t fieldNo, const char* value) {
+  debug(F("Updating cron ["), cronNo, F("] field ["), CRON_FIELDS_NAMES[fieldNo], F("] with value:"), value);
+  String(value).toCharArray(_irrCronExpressions[cronNo][fieldNo], CRON_FIELD_STRING_SIZE);
 }
 
 bool saveCronConf (uint8_t cronNo) {
-  char toSave[CRON_FIELDS * CRON_FIELD_SIZE + 5 + 1] = {'\0'}; //fields size + spaces + end char
+  char toSave[CRON_FIELDS * CRON_FIELD_SIZE + CRON_FIELDS] = {'\0'}; //fields size + spaces + end char
   size_t cursor = 0;
   for (size_t fieldNo = 0; fieldNo < CRON_FIELDS; ++fieldNo) {
     size_t i = 0;

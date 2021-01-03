@@ -3,6 +3,11 @@
 #include <time.h>
 #include <string>
 
+/*
+HEAP Improvement https://learn.adafruit.com/memories-of-an-arduino/optimizing-sram
+Avoid String https://hackingmajenkoblog.wordpress.com/2016/02/04/the-evils-of-arduino-strings/
+*/
+
 void setup();
 void loop();
 void initializeScheduling();
@@ -28,6 +33,7 @@ const size_t  CRON_FIELD_STRING_SIZE  = CRON_FIELD_SIZE + 1;
 const size_t  CRON_FIELDS             = 6;
 const char*   CRON_FIELDS_NAMES[]     = {"SEC", "MIN", "HOU", "DOM", "MON", "DOW"};
 
+const char* MODULE_TYPE               = "irrigation";
 
 /* Irrigation control */
 tCron           _irrCronExpressions[MAX_CRONS] = {
@@ -76,14 +82,15 @@ void setup() {
   delay(500);
   Serial.println();
   debug(F("Starting module"));
-  String ssid = "Proeza irrigation " + String(ESP.getChipId());
-  _domoticModule.setPortalSSID(ssid.c_str());
+  std::string chipid = "" + ESP.getChipId();
+  std::string chipname = "Proeza irrigation " + chipid;
+  _domoticModule.setPortalSSID(chipname.c_str());
   _domoticModule.setFeedbackPin(LED_PIN);
   _domoticModule.setMqttMessageCallback(receiveMqttMessage);
   _domoticModule.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
   _domoticModule.setWifiConnectTimeout(WIFI_CONNECT_TIMEOUT);
   _domoticModule.setConfigFileSize(CONFIG_FILE_SIZE);
-  _domoticModule.setModuleType("irrigation");
+  _domoticModule.setModuleType(MODULE_TYPE);
   _domoticModule.addChannel(&_channelA);
   _domoticModule.addChannel(&_channelB);
   _domoticModule.addChannel(&_channelC);
@@ -208,7 +215,7 @@ void loadCronConf(uint8_t cronNo) {
 
 void updateCronField(uint8_t cronNo, uint8_t fieldNo, const char* value) {
   debug(F("Updating cron ["), cronNo, F("] field ["), CRON_FIELDS_NAMES[fieldNo], F("] with value:"), value);
-  String(value).toCharArray(_irrCronExpressions[cronNo][fieldNo], CRON_FIELD_STRING_SIZE);
+  strcpy(_irrCronExpressions[cronNo][fieldNo], value);
 }
 
 bool saveCronConf (uint8_t cronNo) {
@@ -265,8 +272,8 @@ bool isTimeToIrrigate () {
   time_t now = time(nullptr);
   Serial.printf("Current time: %s", ctime(&now));
   struct tm * ptm = localtime(&now);
-  String dow = ptm->tm_wday < 7 ? String(DAYS_OF_WEEK[ptm->tm_wday]): "";
-  String mon = ptm->tm_mon < 12 ? String(MONTHS_OF_YEAR[ptm->tm_mon]): "";
+  const char* mon = ptm->tm_mon < 12 ? MONTHS_OF_YEAR[ptm->tm_mon] : "";
+  const char* dow = ptm->tm_wday < 7 ? DAYS_OF_WEEK[ptm->tm_wday] : "";
   // Evaluates cron at minute level. Seconds granularity is not needed for irrigarion scheduling.
   boolean tti;
   uint8_t cronNo = 0;
@@ -284,10 +291,10 @@ bool isTimeToIrrigate () {
     tti &= _irrCronExpressions[cronNo][3][0] == '*' 
                       || atoi(_irrCronExpressions[cronNo][3]) == ptm->tm_mday; // Day of month
     tti &= _irrCronExpressions[cronNo][4][0] == '*' 
-                      || String(_irrCronExpressions[cronNo][4]).equalsIgnoreCase(mon) 
+                      || strncasecmp(mon, _irrCronExpressions[cronNo][4], CRON_FIELD_SIZE) == 0 
                       || atoi(_irrCronExpressions[cronNo][4]) == ptm->tm_mon + 1; // Month
     tti &= _irrCronExpressions[cronNo][5][0] == '?'
-                      || String(_irrCronExpressions[cronNo][5]).equalsIgnoreCase(dow) 
+                      || strncasecmp(dow, _irrCronExpressions[cronNo][5], CRON_FIELD_SIZE) == 0
                       || atoi(_irrCronExpressions[cronNo][5]) == ptm->tm_wday + 1; // Day of week
     debug(F("Checking cron"), cronNo);
     ++cronNo;

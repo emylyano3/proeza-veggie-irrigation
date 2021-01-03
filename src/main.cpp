@@ -1,39 +1,45 @@
 #include <ESP8266WiFi.h>
 #include <ESPDomotic.h>
 #include <time.h>
+#include <string>
+
+using namespace std;
 
 void setup();
 void loop();
 void initializeScheduling();
-void updateCron(uint8_t cronNo, unsigned char* payload, unsigned int length);
+bool saveCronConf(uint8_t cronNo);
 void loadCronConf(uint8_t cronNo);
-void setCronExpressionChunk(uint8_t cronNo, uint8_t index, const char* value);
-void setCron(uint8_t cronNo, char* payload);
+void updateCronFieldConf(uint8_t cronNo, uint8_t index, const char* value);
 void checkIrrigation();
 bool isTimeToCheckSchedule ();
 bool isTimeToIrrigate ();
 void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length);
-void mqttConnectionCallback();
-bool changeStateCommand(unsigned char* payload, unsigned int length);
-char* mqttPayloadToString (uint8_t* payload, unsigned int length, char* buff);
+void updateCronCommand(char* topic, unsigned char* payload, unsigned int length);
+bool changeStateCommand(char* topic, unsigned char* payload, unsigned int length);
 
 /* Constants */
-const char*         DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
-const char*         MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
-
-const char*         CRONS_CONF[] = {"CRON_0.conf", "CRON_1.conf"};
+const char* DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
+const char* MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
 
 typedef char* tCron[6];
 
-/* Irrigation control */
-tCron           _irrCronExpression[2] = {
-  {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]},
-  {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]}
-};
+/* Crons management */
+const char*   CRONS_CONF_FILES[]      = {"CRON_0.conf", "CRON_1.conf", "CRON_2.conf"};
+const size_t  CRON_FIELD_STRING_SIZE  = CRON_FIELD_SIZE + 1;
+const size_t  CRON_FIELDS             = 6;
+const char*   CRON_FIELDS_NAMES[]     = {"SEC", "MIN", "HOU", "DOM", "MON", "DOW"};
 
+
+/* Irrigation control */
+tCron           _irrCronExpressions[MAX_CRONS] = {
+  {new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE]}, // 3 + 1 (max field length + '\0')
+  {new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE]},
+  {new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE]}
+};
 bool            _irrigating           = false;
 uint8_t         _currChannel          = 0;
-unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD * 1000; // TIMER_CHECK_THRESHOLD is in seconds
+unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD_SECONDS * 1000;
 
 /* Channels control */
 #ifdef NODEMCUV2
@@ -44,7 +50,7 @@ Channel _channelC ("C", "channel_C", D4, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1
 Channel _channelD ("D", "channel_D", D5, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
 
 const uint8_t LED_PIN         = D7;
-// TODO Define pin consts un configuration file (ini file)
+// TODO Define pin consts in configuration file (ini file)
 #elif ESP12
   Channel _channelA ("A", "channel_A", 2, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
   Channel _channelB ("B", "channel_B", 4, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
@@ -56,31 +62,25 @@ const uint8_t LED_PIN         = 13;
 
 ESPDomotic _domoticModule;
 
-template <class T> void log (T text) {
-  #ifdef LOGGING
-  Serial.print("*IRR: ");
-  Serial.println(text);
-  #endif
+template <typename T> void debug(T t) {
+  Serial.println(t);
 }
 
-template <class T, class U> void log (T key, U value) {
-  #ifdef LOGGING
-  Serial.print("*IRR: ");
-  Serial.print(key);
-  Serial.print(": ");
-  Serial.println(value);
-  #endif
+ /* recursive variadic function */
+template<typename T, typename... Args> void debug(T t, Args... args) {
+  Serial.print(t);
+  Serial.print(" ");
+  debug(args...) ;
 }
 
 void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
-  log(F("Starting module"));
+  debug(F("Starting module"));
   String ssid = "Proeza irrigation " + String(ESP.getChipId());
   _domoticModule.setPortalSSID(ssid.c_str());
   _domoticModule.setFeedbackPin(LED_PIN);
-  _domoticModule.setMqttConnectionCallback(mqttConnectionCallback);
   _domoticModule.setMqttMessageCallback(receiveMqttMessage);
   _domoticModule.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
   _domoticModule.setWifiConnectTimeout(WIFI_CONNECT_TIMEOUT);
@@ -91,9 +91,9 @@ void setup() {
   _domoticModule.addChannel(&_channelC);
   _domoticModule.addChannel(&_channelD);
   _domoticModule.init();
-  log(F("Connected to wifi network. Local IP"), WiFi.localIP());
+  debug(F("Connected to wifi network. Local IP"), WiFi.localIP());
   configTime(TIMEZONE * 3600, 0, "ar.pool.ntp.org", "br.pool.ntp.org", "cl.pool.ntp.org"); // argentina, brazil, chile
-  log(F("Waiting for time..."));
+  debug(F("Waiting for time..."));
   time_t now;
   while (!(now = time(nullptr))) {
     delay(500);
@@ -102,101 +102,24 @@ void setup() {
   initializeScheduling();
 }
 
+void initializeScheduling () {
+  debug(F("Initializing scheduling"));
+  for (uint8_t cronNo = 0; cronNo < MAX_CRONS; ++cronNo) {
+    loadCronConf(cronNo);
+  }
+}
+
 void loop() {
   _domoticModule.loop();
   checkIrrigation();
   delay(LOOP_DELAY);
 }
 
-void initializeScheduling () {
-  log(F("Initializing scheduling"));
-  for (uint8_t cronNo = 0; cronNo < MAX_CRONS; ++cronNo) {
-    loadCronConf(cronNo);
-  }
-}
-
-void loadCronConf(uint8_t cronNo) {
-  log(F("Getting configuration for cron number"), cronNo);
-  char* conf = _domoticModule.getConf(CRONS_CONF[cronNo]);
-  if (conf) {
-    log(F("Cron conf loaded"), conf);
-    setCron(cronNo, conf);
-    delete[] conf;
-  } else { 
-    log(F("Conf not found for cron number"), cronNo);
-    setCronExpressionChunk(cronNo, 0, "0");
-    setCronExpressionChunk(cronNo, 1, "0");
-    setCronExpressionChunk(cronNo, 2, "4");
-    setCronExpressionChunk(cronNo, 3, "*");
-    setCronExpressionChunk(cronNo, 4, "*");
-    setCronExpressionChunk(cronNo, 5, "?");
-  }
-}
-
-void setCron(uint8_t cronNo, char* payload) {
-  unsigned int i = 0; 
-  size_t k = 0;
-  size_t length = strlen(payload);
-  while (i < length && k < 6) { // cron consist of 6 chunks
-    if (payload[i] == ' ') {
-      ++i;
-    } else {
-      char aux[] = {'\0','\0','\0','\0'}; // cron chunks cant have more than 3 chars
-      int j = 0;
-      while (i < length && payload[i] != ' ' && j < 3) {
-        aux[j++] = payload[i++];
-      }
-      setCronExpressionChunk(cronNo, k++, aux);
-    }
-  }
-}
-
-void setCronExpressionChunk(uint8_t cronNo, uint8_t index, const char* value) {
-  log(F("Setting cron chunk"), value);
-  String(value).toCharArray(_irrCronExpression[cronNo][index], 4);
-}
-
-void updateCron(uint8_t cronNo, unsigned char* payload, unsigned int length) {
-  log(F("Updating cron"));
-  if (length < 11) {
-    log(F("Invalid payload"));
-  } else {
-    char cronConf[length + 1];
-    mqttPayloadToString(payload, length, cronConf);
-    setCron(cronNo, cronConf);
-    if (_domoticModule.updateConf(CRONS_CONF[cronNo], cronConf)) {
-      log(F("Cron conf persisted OK"));
-    } else {
-      log(F("Cron conf not saved"));
-    }
-    #ifndef LOGGING
-    Serial.print("New cron expression: ");
-    for (int i = 0; i < 6; ++i) {
-      Serial.print(_irrCronExpression[cronNo][i]);
-      Serial.print(" ");
-    }
-    Serial.println();
-    #endif
-  }
-}
-
-char* mqttPayloadToString (uint8_t* payload, unsigned int length, char* buff) {
-  log(F("MQTT payload to string. Length"), length);
-  for (unsigned int i = 0; i < length; ++i) {
-    buff[i] = payload[i];
-    Serial.print(payload[i]);
-  }
-  Serial.println();
-  buff[length] = '\0';
-  log(F("Payload converted"), buff);
-  return buff;
-}
-
 void checkIrrigation() {
   if (!_irrigating) {
     if (isTimeToCheckSchedule()) {
       if (isTimeToIrrigate()) {
-        log(F("Irrigation sequence started"));
+        debug(F("Irrigation sequence started"));
         _irrigating = true;
         _currChannel = 0;
         _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), "1");
@@ -204,21 +127,21 @@ void checkIrrigation() {
     }
   } else {
     if (_currChannel >= _domoticModule.getChannelsCount()) {
-      log(F("No more channels to process. Stoping irrigation sequence."));
+      debug(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
       _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), "0");
     } else {
       Channel *channel = _domoticModule.getChannel(_currChannel);
       if (!channel->isEnabled()) {
-        log(F("Channel is disabled, going to next one."), channel->name);
+        debug(F("Channel is disabled, going to next one."), channel->name);
         ++_currChannel;
       } else {
         if (channel->state == HIGH) {
-          log(F("Openning channel"), channel->name);
+          debug(F("Openning channel"), channel->name);
           _domoticModule.updateChannelState(channel, LOW);
         } else {
            if (channel->timeIsUp()) {
-            log(F("Closing channel"), channel->name);
+            debug(F("Closing channel"), channel->name);
             _domoticModule.updateChannelState(channel, HIGH);
             _currChannel++;
             delay(CLOSE_VALVE_DELAY);
@@ -229,18 +152,114 @@ void checkIrrigation() {
   }
 }
 
-void mqttConnectionCallback() {
-  // no additional action needed on mqtt client
+void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length) {
+  debug(F("MQTT message on topic"), topic);
+  // Station topic
+  string receivedTopic = string(topic);
+  if (receivedTopic.find(_domoticModule.getStationTopic("command/cron/").c_str()) != string::npos) {
+    updateCronCommand(topic, payload, length);
+  } else if (receivedTopic.find(_domoticModule.getStationTopic("command/state").c_str()) != string::npos) {
+    changeStateCommand(topic, payload, length);
+    _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), _irrigating ? "1" : "0");
+  } else {
+    debug(F("Unknown topic"));
+  }
+}
+
+void updateCronCommand (char* topic, unsigned char* payload, unsigned int length) {
+  string tail = string(topic).substr(_domoticModule.getStationTopic("command/cron/").length());
+  string cronNo = tail.substr(0, tail.find("/"));
+  string fieldNo = tail.substr(tail.find("/") + 1);
+  payload[length] = '\0';
+  updateCronFieldConf(atoi(cronNo.c_str()), atoi(fieldNo.c_str()), (char*)payload);
+  saveCronConf(atoi(cronNo.c_str()));
+}
+
+void loadCronConf(uint8_t cronNo) {
+  debug(F("Getting configuration for cron number"), cronNo);
+  char* conf = _domoticModule.getConf(CRONS_CONF_FILES[cronNo]);
+  if (conf) {
+    debug(F("Cron conf loaded"), conf);
+    size_t i = 0, chunkNo = 0, length = strlen(conf);
+    while (i < length && chunkNo < CRON_FIELDS) {
+      if (conf[i] == ' ') {
+        ++i;
+      } else {
+        char value[CRON_FIELD_STRING_SIZE] = {'\0'}; 
+        int j = 0;
+        while (i < length && conf[i] != ' ' && j < CRON_FIELD_SIZE) 
+          value[j++] = conf[i++];
+        updateCronFieldConf(cronNo, chunkNo++, value);
+      }
+    }
+    delete[] conf;
+  } else { 
+    debug(F("Conf not found for cron number"), cronNo, F(". Setting defaults"));
+    updateCronFieldConf(cronNo, 0, "0");
+    updateCronFieldConf(cronNo, 1, "0");
+    updateCronFieldConf(cronNo, 2, "6");
+    updateCronFieldConf(cronNo, 3, "*");
+    updateCronFieldConf(cronNo, 4, "*");
+    updateCronFieldConf(cronNo, 5, "?");
+  }
+}
+
+void updateCronFieldConf(uint8_t cronNo, uint8_t fieldNo, const char* value) {
+  debug(F("Updating cron ["), cronNo, F("] field ["), CRON_FIELDS_NAMES[fieldNo], F("] with value"), value);
+  String(value).toCharArray(_irrCronExpressions[cronNo][fieldNo], CRON_FIELD_SIZE);
+}
+
+bool saveCronConf (uint8_t cronNo) {
+  char toSave[CRON_FIELDS * CRON_FIELD_SIZE + 5 + 1] = {'\0'}; //fields size + spaces + end char
+  size_t cursor = 0;
+  for (size_t fieldNo = 0; fieldNo < CRON_FIELDS; ++fieldNo) {
+    size_t i = 0;
+    while (i < CRON_FIELD_SIZE && _irrCronExpressions[cronNo][fieldNo][i] != '\0') {
+      toSave[cursor++] = _irrCronExpressions[cronNo][fieldNo][i++];
+    }
+    if (fieldNo != CRON_FIELDS - 1) 
+      toSave[cursor++]= ' '; //no space after last field
+  }
+  debug(F("Saving cron"), cronNo, F(" conf: "), toSave);
+  return _domoticModule.updateConf(CRONS_CONF_FILES[cronNo], toSave);
+}
+
+bool changeStateCommand(char* topic, unsigned char* payload, unsigned int length) {
+  if (length != 1) {
+    debug(F("Invalid payload"));
+  } else {
+    switch (payload[0]) {
+      case '0':
+        if (_irrigating) {
+          // Set irrigation end to 0 to simulate it should have ended 
+          Channel *channel = _domoticModule.getChannel(_currChannel);
+          _domoticModule.updateChannelState(channel, HIGH);
+          _irrigating = false;
+          debug(F("Irrigation stopped"));
+        }
+        return true;
+      case '1':
+        if (!_irrigating) {
+          _irrigating = true;
+          _currChannel = 0;
+          debug(F("Irrigation started"));
+        }
+        return true;
+      default:
+        debug(F("Invalid state"), payload[0]);
+    }
+  }
+  return false;
 }
 
 bool isTimeToCheckSchedule () {
-  bool isTime = _irrLastScheduleCheck + TIMER_CHECK_THRESHOLD * 1000 < millis();
+  bool isTime = _irrLastScheduleCheck + TIMER_CHECK_THRESHOLD_SECONDS * 1000 < millis();
   _irrLastScheduleCheck = isTime ? millis() : _irrLastScheduleCheck;
   return isTime;
 }
 
 bool isTimeToIrrigate () {
-  log(F("Checking if is time to start irrigation"));
+  debug(F("Checking if it is time to start irrigation"));
   time_t now = time(nullptr);
   Serial.printf("Current time: %s", ctime(&now));
   struct tm * ptm = localtime(&now);
@@ -251,69 +270,26 @@ bool isTimeToIrrigate () {
   uint8_t cronNo = 0;
   do {
     tti = true;
-    tti &= _irrCronExpression[cronNo][1][0] == '*' 
-                      || atoi(_irrCronExpression[cronNo][1]) == ptm->tm_min 
+    tti &= _irrCronExpressions[cronNo][1][0] == '*' 
+                      || atoi(_irrCronExpressions[cronNo][1]) == ptm->tm_min 
                       || (  
-                          ptm->tm_min > atoi(_irrCronExpression[cronNo][1]) 
+                          ptm->tm_min > atoi(_irrCronExpressions[cronNo][1]) 
                           && 
-                          ptm->tm_min - (TIMER_CHECK_THRESHOLD / 60) <= atoi(_irrCronExpression[cronNo][1])
+                          ptm->tm_min - (TIMER_CHECK_THRESHOLD_SECONDS / 60) <= atoi(_irrCronExpressions[cronNo][1])
                         ); // Minute
-    tti &= _irrCronExpression[cronNo][2][0] == '*' 
-                      || atoi(_irrCronExpression[cronNo][2]) == ptm->tm_hour; // Hour
-    tti &= _irrCronExpression[cronNo][3][0] == '*' 
-                      || atoi(_irrCronExpression[cronNo][3]) == ptm->tm_mday; // Day of month
-    tti &= _irrCronExpression[cronNo][4][0] == '*' 
-                      || String(_irrCronExpression[cronNo][4]).equalsIgnoreCase(mon) 
-                      || atoi(_irrCronExpression[cronNo][4]) == ptm->tm_mon + 1; // Month
-    tti &= _irrCronExpression[cronNo][5][0] == '?'
-                      || String(_irrCronExpression[cronNo][5]).equalsIgnoreCase(dow) 
-                      || atoi(_irrCronExpression[cronNo][5]) == ptm->tm_wday + 1; // Day of week
-    log(F("Checking cron"), cronNo);
+    tti &= _irrCronExpressions[cronNo][2][0] == '*' 
+                      || atoi(_irrCronExpressions[cronNo][2]) == ptm->tm_hour; // Hour
+    tti &= _irrCronExpressions[cronNo][3][0] == '*' 
+                      || atoi(_irrCronExpressions[cronNo][3]) == ptm->tm_mday; // Day of month
+    tti &= _irrCronExpressions[cronNo][4][0] == '*' 
+                      || String(_irrCronExpressions[cronNo][4]).equalsIgnoreCase(mon) 
+                      || atoi(_irrCronExpressions[cronNo][4]) == ptm->tm_mon + 1; // Month
+    tti &= _irrCronExpressions[cronNo][5][0] == '?'
+                      || String(_irrCronExpressions[cronNo][5]).equalsIgnoreCase(dow) 
+                      || atoi(_irrCronExpressions[cronNo][5]) == ptm->tm_wday + 1; // Day of week
+    debug(F("Checking cron"), cronNo);
     ++cronNo;
   } while (!tti && cronNo < MAX_CRONS);
-  log(F("IS TTI?"), tti);
+  debug(F("IS TTI?"), tti);
   return tti;
-}
-
-void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
-  log(F("MQTT message on topic"), topic);
-  // Station topics
-  if (String(topic).equals(_domoticModule.getStationTopic("command/cron/0"))) {
-    updateCron(0, payload, length);
-  } else if (String(topic).equals(_domoticModule.getStationTopic("command/cron/1"))) {
-    updateCron(1, payload, length);
-  } else if (String(topic).equals(_domoticModule.getStationTopic("command/state"))) {
-    changeStateCommand(payload, length);
-    _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), _irrigating ? "1" : "0");
-  } else {
-    log(F("Unknown topic"));
-  }
-}
-
-bool changeStateCommand(unsigned char* payload, unsigned int length) {
-  if (length != 1) {
-    log(F("Invalid payload"));
-  } else {
-    switch (payload[0]) {
-      case '0':
-        if (_irrigating) {
-          // Set irrigation end to 0 to simulate it should have ended 
-          Channel *channel = _domoticModule.getChannel(_currChannel);
-          _domoticModule.updateChannelState(channel, HIGH);
-          _irrigating = false;
-          log(F("Irrigation stopped"));
-        }
-        return true;
-      case '1':
-        if (!_irrigating) {
-          _irrigating = true;
-          _currChannel = 0;
-          log(F("Irrigation started"));
-        }
-        return true;
-      default:
-        log(F("Invalid state"), payload[0]);
-    }
-  }
-  return false;
 }

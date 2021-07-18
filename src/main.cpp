@@ -169,7 +169,7 @@ void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length
     changeStateCommand(topic, payload, length);
     _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), _irrigating ? "1" : "0");
   } else {
-    debug(F("Unknown topic"));
+    debug(F("Not a station topic"));
   }
 }
 

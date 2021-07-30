@@ -1,203 +1,184 @@
 #include <ESP8266WiFi.h>
 #include <ESPDomotic.h>
 #include <time.h>
+#include <string>
+#include <sstream>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
+
+/*
+HEAP Improvement https://learn.adafruit.com/memories-of-an-arduino/optimizing-sram
+Avoid String https://hackingmajenkoblog.wordpress.com/2016/02/04/the-evils-of-arduino-strings/
+*/
 
 void setup();
 void loop();
 void initializeScheduling();
-void updateCron(uint8_t cronNo, unsigned char* payload, unsigned int length);
+bool saveCronConf(uint8_t cronNo);
 void loadCronConf(uint8_t cronNo);
-void setCronExpressionChunk(uint8_t cronNo, uint8_t index, const char* value);
-void setCron(uint8_t cronNo, char* payload);
+void updateCronField(uint8_t cronNo, uint8_t index, const char* value);
 void checkIrrigation();
 bool isTimeToCheckSchedule ();
 bool isTimeToIrrigate ();
 void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length);
-void mqttConnectionCallback();
-bool changeStateCommand(unsigned char* payload, unsigned int length);
-char* mqttPayloadToString (uint8_t* payload, unsigned int length, char* buff);
+void updateCronCommand(char* topic, unsigned char* payload, unsigned int length);
+bool changeStateCommand(char* topic, unsigned char* payload, unsigned int length);
+
+void initSensor();
+void publishSensorData();
+bool isTimeToReadSensor();
+void publishValue(const char* name, float value, Channel *channel);
 
 /* Constants */
-const char*         DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
-const char*         MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
-
-const char*         CRONS_CONF[] = {"CRON_0.conf", "CRON_1.conf"};
+const char* DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
+const char* MONTHS_OF_YEAR[]  = {"JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DIC"};
 
 typedef char* tCron[6];
 
-/* Irrigation control */
-tCron           _irrCronExpression[2] = {
-  {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]},
-  {new char[4], new char[4], new char[4], new char[4], new char[4], new char[4]}
-};
+/* Crons management */
+const char*   CRONS_CONF_FILES[]      = {"CRON_0.conf", "CRON_1.conf", "CRON_2.conf"};
+const size_t  CRON_FIELD_STRING_SIZE  = CRON_FIELD_SIZE + 1;
+const size_t  CRON_FIELDS             = 6;
+const char*   CRON_FIELDS_NAMES[]     = {"SEC", "MIN", "HOU", "DOM", "MON", "DOW"};
 
+const char* MODULE_TYPE               = "irrigation";
+
+/* Irrigation control */
+tCron           _irrCronExpressions[MAX_CRONS] = {
+  {new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE]}, // 3 + 1 (max field length + '\0')
+  {new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE]},
+  {new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE], new char[CRON_FIELD_STRING_SIZE]}
+};
 bool            _irrigating           = false;
 uint8_t         _currChannel          = 0;
-unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD * 1000; // TIMER_CHECK_THRESHOLD is in seconds
+unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD_SECONDS * 1000;
 
 /* Channels control */
 #ifdef NODEMCUV2
-  // Id, Name, pin, state, timer 
-Channel _channelA ("A", "channel_A", D1, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-Channel _channelB ("B", "channel_B", D2, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-Channel _channelC ("C", "channel_C", D4, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-Channel _channelD ("D", "channel_D", D5, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-
-const uint8_t LED_PIN         = D7;
-// TODO Define pin consts un configuration file (ini file)
+const uint8_t CHANNEL_A_PIN = D1;
+const uint8_t CHANNEL_B_PIN = D2;
+const uint8_t CHANNEL_C_PIN = D4;
+const uint8_t CHANNEL_D_PIN = D5;
+const uint8_t SENSOR_PIN    = D6;
+const uint8_t LED_PIN       = D7;
+// TODO Define pin consts in configuration file (ini file)
 #elif ESP12
-  Channel _channelA ("A", "channel_A", 2, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-  Channel _channelB ("B", "channel_B", 4, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-  Channel _channelC ("C", "channel_C", 5, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-  Channel _channelD ("D", "channel_D", 16, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-
-const uint8_t LED_PIN         = 13;
+const uint8_t CHANNEL_A_PIN = 2;
+const uint8_t CHANNEL_B_PIN = 4;
+const uint8_t CHANNEL_C_PIN = 5;
+const uint8_t CHANNEL_D_PIN = 16;
+const uint8_t SENSOR_PIN    = 14;
+const uint8_t LED_PIN       = 13;
 #endif
 
-ESPDomotic _domoticModule;
+  // Id, Name, pin, state, timer 
+Channel       _channelA ("A", "channel_A", CHANNEL_A_PIN, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER_SECONDS * 1000);
+Channel       _channelB ("B", "channel_B", CHANNEL_B_PIN, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER_SECONDS * 1000);
+Channel       _channelC ("C", "channel_C", CHANNEL_C_PIN, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER_SECONDS * 1000);
+Channel       _channelD ("D", "channel_D", CHANNEL_D_PIN, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER_SECONDS * 1000);
+Channel       _sensorChannel ("dht22", "sensor", SENSOR_PIN, INPUT, LOW); 
+DHT_Unified   _temperatureSensor(SENSOR_PIN, DHT22);
 
-template <class T> void log (T text) {
-  #ifdef LOGGING
-  Serial.print("*IRR: ");
-  Serial.println(text);
-  #endif
+ESPDomotic _domoticModule;
+uint32_t   _sensorReadThreshold;
+uint32_t   _lastSensorRead;
+
+template <typename T> void debug(T t) {
+  Serial.println(t);
 }
 
-template <class T, class U> void log (T key, U value) {
-  #ifdef LOGGING
-  Serial.print("*IRR: ");
-  Serial.print(key);
-  Serial.print(": ");
-  Serial.println(value);
-  #endif
+ /* recursive variadic function */
+template<typename T, typename... Args> void debug(T t, Args... args) {
+  Serial.print(t);
+  Serial.print(" ");
+  debug(args...) ;
 }
 
 void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
-  log("Starting module");
-  String ssid = "Proeza irrigation " + String(ESP.getChipId());
-  _domoticModule.setPortalSSID(ssid.c_str());
+  debug(F("Starting module"));
+  std::ostringstream s;
+  s << "Proeza irrigation " << ESP.getChipId();
+  std::string chipname(s.str());
+  _domoticModule.setPortalSSID(chipname.c_str());
   _domoticModule.setFeedbackPin(LED_PIN);
-  _domoticModule.setMqttConnectionCallback(mqttConnectionCallback);
   _domoticModule.setMqttMessageCallback(receiveMqttMessage);
   _domoticModule.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
   _domoticModule.setWifiConnectTimeout(WIFI_CONNECT_TIMEOUT);
   _domoticModule.setConfigFileSize(CONFIG_FILE_SIZE);
-  _domoticModule.setModuleType("irrigation");
+  _domoticModule.setModuleType(MODULE_TYPE);
   _domoticModule.addChannel(&_channelA);
   _domoticModule.addChannel(&_channelB);
   _domoticModule.addChannel(&_channelC);
   _domoticModule.addChannel(&_channelD);
   _domoticModule.init();
-  log(F("Connected to wifi network. Local IP"), WiFi.localIP());
+  debug(F("Connected to wifi network. Local IP"), WiFi.localIP());
   configTime(TIMEZONE * 3600, 0, "ar.pool.ntp.org", "br.pool.ntp.org", "cl.pool.ntp.org"); // argentina, brazil, chile
-  log("Waiting for time...");
+  debug(F("Waiting for time..."));
   time_t now;
   while (!(now = time(nullptr))) {
     delay(500);
   }
   Serial.printf("Current time: %s", ctime(&now));
   initializeScheduling();
-}
-
-void loop() {
-  _domoticModule.loop();
-  checkIrrigation();
-  delay(LOOP_DELAY);
+  initSensor();
 }
 
 void initializeScheduling () {
-  log("Initializing scheduling");
+  debug(F("Initializing scheduling"));
   for (uint8_t cronNo = 0; cronNo < MAX_CRONS; ++cronNo) {
     loadCronConf(cronNo);
   }
 }
 
-void loadCronConf(uint8_t cronNo) {
-  log("Getting configuration for cron number", cronNo);
-  char* conf = _domoticModule.getConf(CRONS_CONF[cronNo]);
-  if (conf) {
-    log("Cron conf loaded", conf);
-    setCron(cronNo, conf);
-    delete[] conf;
-  } else { 
-    log("Conf not found for cron number", cronNo);
-    setCronExpressionChunk(cronNo, 0, "0");
-    setCronExpressionChunk(cronNo, 1, "0");
-    setCronExpressionChunk(cronNo, 2, "4");
-    setCronExpressionChunk(cronNo, 3, "*");
-    setCronExpressionChunk(cronNo, 4, "*");
-    setCronExpressionChunk(cronNo, 5, "?");
+void initSensor() {
+  _temperatureSensor.begin();
+  sensor_t sensor;
+  _temperatureSensor.temperature().getSensor(&sensor);
+  _sensorReadThreshold = max(sensor.min_delay / 1000, SENSE_THRESHOLD_SECONDS * 1000);
+  debug("Sensor read delay:", _sensorReadThreshold);
+}
+
+void loop() {
+  _domoticModule.loop();
+  checkIrrigation();
+  publishSensorData();
+  delay(LOOP_DELAY);
+}
+
+void publishSensorData() {
+  if (isTimeToReadSensor()) {
+    _lastSensorRead = millis();
+    sensors_event_t event;
+    _temperatureSensor.temperature().getEvent(&event);
+    publishValue("temperature", event.temperature, &_sensorChannel);
+    debug("Temperature: ", event.temperature);
+    _temperatureSensor.humidity().getEvent(&event);
+    publishValue("humidity", event.relative_humidity, &_sensorChannel);
+    debug("Humidity: ", event.relative_humidity);
   }
 }
 
-void setCron(uint8_t cronNo, char* payload) {
-  unsigned int i = 0; 
-  size_t k = 0;
-  size_t length = strlen(payload);
-  while (i < length && k < 6) { // cron consist of 6 chunks
-    if (payload[i] == ' ') {
-      ++i;
-    } else {
-      char aux[] = {'\0','\0','\0','\0'}; // cron chunks cant have more than 3 chars
-      int j = 0;
-      while (i < length && payload[i] != ' ' && j < 3) {
-        aux[j++] = payload[i++];
-      }
-      setCronExpressionChunk(cronNo, k++, aux);
+bool isTimeToReadSensor() {
+  return _lastSensorRead + _sensorReadThreshold < millis();
+}
+
+void publishValue(const char* name, float value, Channel *channel) {
+    if (!isnan(value)) {
+        _domoticModule.getMqttClient()->publish(
+            _domoticModule.getChannelTopic(channel, name).c_str(), 
+            String(value).c_str());
     }
-  }
-}
-
-void setCronExpressionChunk(uint8_t cronNo, uint8_t index, const char* value) {
-  String sChunk = String(value);
-  log("Setting cron chunk", String(sChunk));
-  sChunk.toCharArray(_irrCronExpression[cronNo][index], 4);
-}
-
-void updateCron(uint8_t cronNo, unsigned char* payload, unsigned int length) {
-  log(F("Updating cron"));
-  if (length < 11) {
-    log(F("Invalid payload"));
-  } else {
-    char cronConf[length + 1];
-    mqttPayloadToString(payload, length, cronConf);
-    setCron(cronNo, cronConf);
-    if (_domoticModule.updateConf(CRONS_CONF[cronNo], cronConf)) {
-      log("Cron conf persisted OK");
-    } else {
-      log("Cron conf not saved");
-    }
-    #ifndef LOGGING
-    Serial.print("New cron expression: ");
-    for (int i = 0; i < 6; ++i) {
-      Serial.print(_irrCronExpression[cronNo][i]);
-      Serial.print(" ");
-    }
-    Serial.println();
-    #endif
-  }
-}
-
-char* mqttPayloadToString (uint8_t* payload, unsigned int length, char* buff) {
-  log("MQTT payload to string. Length", length);
-  for (unsigned int i = 0; i < length; ++i) {
-    buff[i] = payload[i];
-    Serial.print(payload[i]);
-  }
-  Serial.println();
-  buff[length] = '\0';
-  log("Payload converted", buff);
-  return buff;
 }
 
 void checkIrrigation() {
   if (!_irrigating) {
     if (isTimeToCheckSchedule()) {
       if (isTimeToIrrigate()) {
-        log(F("Irrigation sequence started"));
+        debug(F("Irrigation sequence started"));
         _irrigating = true;
         _currChannel = 0;
         _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), "1");
@@ -205,21 +186,21 @@ void checkIrrigation() {
     }
   } else {
     if (_currChannel >= _domoticModule.getChannelsCount()) {
-      log(F("No more channels to process. Stoping irrigation sequence."));
+      debug(F("No more channels to process. Stoping irrigation sequence."));
       _irrigating = false;
       _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), "0");
     } else {
       Channel *channel = _domoticModule.getChannel(_currChannel);
       if (!channel->isEnabled()) {
-        log(F("Channel is disabled, going to next one."), channel->name);
+        debug(F("Channel is disabled, going to next one."), channel->name);
         ++_currChannel;
       } else {
         if (channel->state == HIGH) {
-          log(F("Openning channel"), channel->name);
+          debug(F("Openning channel"), channel->name);
           _domoticModule.updateChannelState(channel, LOW);
         } else {
            if (channel->timeIsUp()) {
-            log(F("Closing channel"), channel->name);
+            debug(F("Closing channel"), channel->name);
             _domoticModule.updateChannelState(channel, HIGH);
             _currChannel++;
             delay(CLOSE_VALVE_DELAY);
@@ -230,70 +211,127 @@ void checkIrrigation() {
   }
 }
 
-void mqttConnectionCallback() {
-  // no additional action needed on mqtt client
-}
-
 bool isTimeToCheckSchedule () {
-  bool isTime = _irrLastScheduleCheck + TIMER_CHECK_THRESHOLD * 1000 < millis();
+  bool isTime = _irrLastScheduleCheck + TIMER_CHECK_THRESHOLD_SECONDS * 1000 < millis();
   _irrLastScheduleCheck = isTime ? millis() : _irrLastScheduleCheck;
   return isTime;
 }
 
 bool isTimeToIrrigate () {
-  log(F("Checking if is time to start irrigation"));
+  debug(F("Checking if it is time to start irrigation"));
   time_t now = time(nullptr);
   Serial.printf("Current time: %s", ctime(&now));
   struct tm * ptm = localtime(&now);
-  String dow = ptm->tm_wday < 7 ? String(DAYS_OF_WEEK[ptm->tm_wday]): "";
-  String mon = ptm->tm_mon < 12 ? String(MONTHS_OF_YEAR[ptm->tm_mon]): "";
+  const char* mon = ptm->tm_mon < 12 ? MONTHS_OF_YEAR[ptm->tm_mon] : "";
+  const char* dow = ptm->tm_wday < 7 ? DAYS_OF_WEEK[ptm->tm_wday] : "";
   // Evaluates cron at minute level. Seconds granularity is not needed for irrigarion scheduling.
-  boolean timeToIrrigate;
+  boolean tti;
   uint8_t cronNo = 0;
   do {
-    timeToIrrigate = true;
-    timeToIrrigate &= _irrCronExpression[cronNo][1][0] == '*' 
-                      || atoi(_irrCronExpression[cronNo][1]) == ptm->tm_min 
+    tti = true;
+    tti &= _irrCronExpressions[cronNo][1][0] == '*' 
+                      || atoi(_irrCronExpressions[cronNo][1]) == ptm->tm_min 
                       || (  
-                          ptm->tm_min > atoi(_irrCronExpression[cronNo][1]) 
+                          ptm->tm_min > atoi(_irrCronExpressions[cronNo][1]) 
                           && 
-                          ptm->tm_min - (TIMER_CHECK_THRESHOLD / 60) <= atoi(_irrCronExpression[cronNo][1])
+                          ptm->tm_min - (TIMER_CHECK_THRESHOLD_SECONDS / 60) <= atoi(_irrCronExpressions[cronNo][1])
                         ); // Minute
-    timeToIrrigate &= _irrCronExpression[cronNo][2][0] == '*' 
-                      || atoi(_irrCronExpression[cronNo][2]) == ptm->tm_hour; // Hour
-    timeToIrrigate &= _irrCronExpression[cronNo][3][0] == '*' 
-                      || atoi(_irrCronExpression[cronNo][3]) == ptm->tm_mday; // Day of month
-    timeToIrrigate &= _irrCronExpression[cronNo][4][0] == '*' 
-                      || String(_irrCronExpression[cronNo][4]).equalsIgnoreCase(mon) 
-                      || atoi(_irrCronExpression[cronNo][4]) == ptm->tm_mon + 1; // Month
-    timeToIrrigate &= _irrCronExpression[cronNo][5][0] == '?'
-                      || String(_irrCronExpression[cronNo][5]).equalsIgnoreCase(dow) 
-                      || atoi(_irrCronExpression[cronNo][5]) == ptm->tm_wday + 1; // Day of week
-    log("Checking cron", cronNo);
+    tti &= _irrCronExpressions[cronNo][2][0] == '*' 
+                      || atoi(_irrCronExpressions[cronNo][2]) == ptm->tm_hour; // Hour
+    tti &= _irrCronExpressions[cronNo][3][0] == '*' 
+                      || atoi(_irrCronExpressions[cronNo][3]) == ptm->tm_mday; // Day of month
+    tti &= _irrCronExpressions[cronNo][4][0] == '*' 
+                      || strncasecmp(mon, _irrCronExpressions[cronNo][4], CRON_FIELD_SIZE) == 0 
+                      || atoi(_irrCronExpressions[cronNo][4]) == ptm->tm_mon + 1; // Month
+    tti &= _irrCronExpressions[cronNo][5][0] == '?'
+                      || strncasecmp(dow, _irrCronExpressions[cronNo][5], CRON_FIELD_SIZE) == 0
+                      || atoi(_irrCronExpressions[cronNo][5]) == ptm->tm_wday + 1; // Day of week
+    debug(F("Checking cron"), cronNo);
     ++cronNo;
-  } while (!timeToIrrigate && cronNo < MAX_CRONS);
-  log("IS TTI", timeToIrrigate);
-  return timeToIrrigate;
+  } while (!tti && cronNo < MAX_CRONS);
+  debug(F("IS TTI?"), tti ? "YES" : "NO");
+  return tti;
 }
 
-void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length) {
-  log(F("MQTT message on topic"), topic);
-  // Station topics
-  if (String(topic).equals(_domoticModule.getStationTopic("command/cron/0"))) {
-    updateCron(0, payload, length);
-  } else if (String(topic).equals(_domoticModule.getStationTopic("command/cron/1"))) {
-    updateCron(1, payload, length);
-  } else if (String(topic).equals(_domoticModule.getStationTopic("command/state"))) {
-    changeStateCommand(payload, length);
+void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length) {
+  debug(F("MQTT message on topic"), topic);
+  // Station topic
+  std::string receivedTopic = std::string(topic);
+  if (receivedTopic.find(_domoticModule.getStationTopic("command/cron/").c_str()) != std::string::npos) {
+    updateCronCommand(topic, payload, length);
+  } else if (receivedTopic.find(_domoticModule.getStationTopic("command/state").c_str()) != std::string::npos) {
+    changeStateCommand(topic, payload, length);
     _domoticModule.getMqttClient()->publish(_domoticModule.getStationTopic("feedback/state").c_str(), _irrigating ? "1" : "0");
   } else {
-    log("Unknown topic");
+    debug(F("Not a station topic"));
   }
 }
 
-bool changeStateCommand(unsigned char* payload, unsigned int length) {
+void updateCronCommand (char* topic, unsigned char* payload, unsigned int length) {
+  std::string tail = std::string(topic).substr(_domoticModule.getStationTopic("command/cron/").length());
+  size_t cronID = atoi(tail.substr(0, tail.find("/")).c_str());
+  size_t fieldID = atoi(tail.substr(tail.find("/") + 1).c_str());
+  char value[length + 1];
+  strcpy(value, (char*) payload);
+  value[length] = '\0'; // to treat payload as string
+  updateCronField(cronID, fieldID, value);
+  saveCronConf(cronID);
+  String feedbackTopic = _domoticModule.getStationTopic("feedback/cron/") + tail.c_str();
+  _domoticModule.getMqttClient()->publish(feedbackTopic.c_str(), value);
+}
+
+void loadCronConf(uint8_t cronNo) {
+  debug(F("Getting configuration for cron number"), cronNo);
+  char* conf = _domoticModule.getConf(CRONS_CONF_FILES[cronNo]);
+  if (conf) {
+    debug(F("Cron conf loaded"), conf);
+    size_t i = 0, chunkNo = 0, length = strlen(conf);
+    while (i < length && chunkNo < CRON_FIELDS) {
+      if (conf[i] == ' ') {
+        ++i;
+      } else {
+        char value[CRON_FIELD_STRING_SIZE] = {'\0'}; 
+        int j = 0;
+        while (i < length && conf[i] != ' ' && j < CRON_FIELD_SIZE) 
+          value[j++] = conf[i++];
+        updateCronField(cronNo, chunkNo++, value);
+      }
+    }
+    delete[] conf;
+  } else { 
+    debug(F("Conf not found for cron number"), cronNo, F(". Setting defaults"));
+    updateCronField(cronNo, 0, "0");
+    updateCronField(cronNo, 1, "0");
+    updateCronField(cronNo, 2, "6");
+    updateCronField(cronNo, 3, "*");
+    updateCronField(cronNo, 4, "*");
+    updateCronField(cronNo, 5, "?");
+  }
+}
+
+void updateCronField(uint8_t cronNo, uint8_t fieldNo, const char* value) {
+  debug(F("Updating cron ["), cronNo, F("] field ["), CRON_FIELDS_NAMES[fieldNo], F("] with value:"), value);
+  strcpy(_irrCronExpressions[cronNo][fieldNo], value);
+}
+
+bool saveCronConf (uint8_t cronNo) {
+  char toSave[CRON_FIELDS * CRON_FIELD_SIZE + CRON_FIELDS] = {'\0'}; //fields size + spaces + end char
+  size_t cursor = 0;
+  for (size_t fieldNo = 0; fieldNo < CRON_FIELDS; ++fieldNo) {
+    size_t i = 0;
+    while (i < CRON_FIELD_SIZE && _irrCronExpressions[cronNo][fieldNo][i] != '\0') {
+      toSave[cursor++] = _irrCronExpressions[cronNo][fieldNo][i++];
+    }
+    if (fieldNo != CRON_FIELDS - 1) 
+      toSave[cursor++]= ' '; //no space after last field
+  }
+  debug(F("Saving cron"), cronNo, F(" conf: "), toSave);
+  return _domoticModule.updateConf(CRONS_CONF_FILES[cronNo], toSave);
+}
+
+bool changeStateCommand(char* topic, unsigned char* payload, unsigned int length) {
   if (length != 1) {
-    log(F("Invalid payload"));
+    debug(F("Invalid payload"));
   } else {
     switch (payload[0]) {
       case '0':
@@ -302,18 +340,18 @@ bool changeStateCommand(unsigned char* payload, unsigned int length) {
           Channel *channel = _domoticModule.getChannel(_currChannel);
           _domoticModule.updateChannelState(channel, HIGH);
           _irrigating = false;
-          log(F("Irrigation stopped"));
+          debug(F("Irrigation stopped"));
         }
         return true;
       case '1':
         if (!_irrigating) {
           _irrigating = true;
           _currChannel = 0;
-          log(F("Irrigation started"));
+          debug(F("Irrigation started"));
         }
         return true;
       default:
-        log(F("Invalid state"), payload[0]);
+        debug(F("Invalid state"), payload[0]);
     }
   }
   return false;

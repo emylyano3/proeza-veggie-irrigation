@@ -3,6 +3,9 @@
 #include <time.h>
 #include <string>
 #include <sstream>
+#include <Adafruit_Sensor.h>
+#include <DHT.h>
+#include <DHT_U.h>
 
 /*
 HEAP Improvement https://learn.adafruit.com/memories-of-an-arduino/optimizing-sram
@@ -21,6 +24,11 @@ bool isTimeToIrrigate ();
 void receiveMqttMessage(char* topic, uint8_t* payload, unsigned int length);
 void updateCronCommand(char* topic, unsigned char* payload, unsigned int length);
 bool changeStateCommand(char* topic, unsigned char* payload, unsigned int length);
+
+void initSensor();
+void publishSensorData();
+bool isTimeToReadSensor();
+void publishValue(const char* name, float value, Channel *channel);
 
 /* Constants */
 const char* DAYS_OF_WEEK[]    = {"SUN","MON","TUE","WED","THU","FRI","SAT"};
@@ -48,24 +56,33 @@ unsigned long   _irrLastScheduleCheck = -TIMER_CHECK_THRESHOLD_SECONDS * 1000;
 
 /* Channels control */
 #ifdef NODEMCUV2
-  // Id, Name, pin, state, timer 
-Channel _channelA ("A", "channel_A", D1, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-Channel _channelB ("B", "channel_B", D2, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-Channel _channelC ("C", "channel_C", D4, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-Channel _channelD ("D", "channel_D", D5, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-
-const uint8_t LED_PIN         = D7;
+const uint8_t CHANNEL_A_PIN = D1;
+const uint8_t CHANNEL_B_PIN = D2;
+const uint8_t CHANNEL_C_PIN = D4;
+const uint8_t CHANNEL_D_PIN = D5;
+const uint8_t SENSOR_PIN    = D6;
+const uint8_t LED_PIN       = D7;
 // TODO Define pin consts in configuration file (ini file)
 #elif ESP12
-  Channel _channelA ("A", "channel_A", 2, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-  Channel _channelB ("B", "channel_B", 4, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-  Channel _channelC ("C", "channel_C", 5, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-  Channel _channelD ("D", "channel_D", 16, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER * 1000);
-
-const uint8_t LED_PIN         = 13;
+const uint8_t CHANNEL_A_PIN = 2;
+const uint8_t CHANNEL_B_PIN = 4;
+const uint8_t CHANNEL_C_PIN = 5;
+const uint8_t CHANNEL_D_PIN = 16;
+const uint8_t SENSOR_PIN    = 14;
+const uint8_t LED_PIN       = 13;
 #endif
 
+  // Id, Name, pin, state, timer 
+Channel       _channelA ("A", "channel_A", CHANNEL_A_PIN, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER_SECONDS * 1000);
+Channel       _channelB ("B", "channel_B", CHANNEL_B_PIN, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER_SECONDS * 1000);
+Channel       _channelC ("C", "channel_C", CHANNEL_C_PIN, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER_SECONDS * 1000);
+Channel       _channelD ("D", "channel_D", CHANNEL_D_PIN, OUTPUT, HIGH, CHANNEL_DEFAULT_TIMER_SECONDS * 1000);
+Channel       _sensorChannel ("dht22", "sensor", SENSOR_PIN, INPUT, LOW); 
+DHT_Unified   _temperatureSensor(SENSOR_PIN, DHT22);
+
 ESPDomotic _domoticModule;
+uint32_t   _sensorReadThreshold;
+uint32_t   _lastSensorRead;
 
 template <typename T> void debug(T t) {
   Serial.println(t);
@@ -107,6 +124,7 @@ void setup() {
   }
   Serial.printf("Current time: %s", ctime(&now));
   initializeScheduling();
+  initSensor();
 }
 
 void initializeScheduling () {
@@ -116,10 +134,44 @@ void initializeScheduling () {
   }
 }
 
+void initSensor() {
+  _temperatureSensor.begin();
+  sensor_t sensor;
+  _temperatureSensor.temperature().getSensor(&sensor);
+  _sensorReadThreshold = max(sensor.min_delay / 1000, SENSE_THRESHOLD_SECONDS * 1000);
+  debug("Sensor read delay:", _sensorReadThreshold);
+}
+
 void loop() {
   _domoticModule.loop();
   checkIrrigation();
+  publishSensorData();
   delay(LOOP_DELAY);
+}
+
+void publishSensorData() {
+  if (isTimeToReadSensor()) {
+    _lastSensorRead = millis();
+    sensors_event_t event;
+    _temperatureSensor.temperature().getEvent(&event);
+    publishValue("temperature", event.temperature, &_sensorChannel);
+    debug("Temperature: ", event.temperature);
+    _temperatureSensor.humidity().getEvent(&event);
+    publishValue("humidity", event.relative_humidity, &_sensorChannel);
+    debug("Humidity: ", event.relative_humidity);
+  }
+}
+
+bool isTimeToReadSensor() {
+  return _lastSensorRead + _sensorReadThreshold < millis();
+}
+
+void publishValue(const char* name, float value, Channel *channel) {
+    if (!isnan(value)) {
+        _domoticModule.getMqttClient()->publish(
+            _domoticModule.getChannelTopic(channel, name).c_str(), 
+            String(value).c_str());
+    }
 }
 
 void checkIrrigation() {
@@ -157,6 +209,48 @@ void checkIrrigation() {
       }
     }
   }
+}
+
+bool isTimeToCheckSchedule () {
+  bool isTime = _irrLastScheduleCheck + TIMER_CHECK_THRESHOLD_SECONDS * 1000 < millis();
+  _irrLastScheduleCheck = isTime ? millis() : _irrLastScheduleCheck;
+  return isTime;
+}
+
+bool isTimeToIrrigate () {
+  debug(F("Checking if it is time to start irrigation"));
+  time_t now = time(nullptr);
+  Serial.printf("Current time: %s", ctime(&now));
+  struct tm * ptm = localtime(&now);
+  const char* mon = ptm->tm_mon < 12 ? MONTHS_OF_YEAR[ptm->tm_mon] : "";
+  const char* dow = ptm->tm_wday < 7 ? DAYS_OF_WEEK[ptm->tm_wday] : "";
+  // Evaluates cron at minute level. Seconds granularity is not needed for irrigarion scheduling.
+  boolean tti;
+  uint8_t cronNo = 0;
+  do {
+    tti = true;
+    tti &= _irrCronExpressions[cronNo][1][0] == '*' 
+                      || atoi(_irrCronExpressions[cronNo][1]) == ptm->tm_min 
+                      || (  
+                          ptm->tm_min > atoi(_irrCronExpressions[cronNo][1]) 
+                          && 
+                          ptm->tm_min - (TIMER_CHECK_THRESHOLD_SECONDS / 60) <= atoi(_irrCronExpressions[cronNo][1])
+                        ); // Minute
+    tti &= _irrCronExpressions[cronNo][2][0] == '*' 
+                      || atoi(_irrCronExpressions[cronNo][2]) == ptm->tm_hour; // Hour
+    tti &= _irrCronExpressions[cronNo][3][0] == '*' 
+                      || atoi(_irrCronExpressions[cronNo][3]) == ptm->tm_mday; // Day of month
+    tti &= _irrCronExpressions[cronNo][4][0] == '*' 
+                      || strncasecmp(mon, _irrCronExpressions[cronNo][4], CRON_FIELD_SIZE) == 0 
+                      || atoi(_irrCronExpressions[cronNo][4]) == ptm->tm_mon + 1; // Month
+    tti &= _irrCronExpressions[cronNo][5][0] == '?'
+                      || strncasecmp(dow, _irrCronExpressions[cronNo][5], CRON_FIELD_SIZE) == 0
+                      || atoi(_irrCronExpressions[cronNo][5]) == ptm->tm_wday + 1; // Day of week
+    debug(F("Checking cron"), cronNo);
+    ++cronNo;
+  } while (!tti && cronNo < MAX_CRONS);
+  debug(F("IS TTI?"), tti ? "YES" : "NO");
+  return tti;
 }
 
 void receiveMqttMessage(char* topic, unsigned char* payload, unsigned int length) {
@@ -261,46 +355,4 @@ bool changeStateCommand(char* topic, unsigned char* payload, unsigned int length
     }
   }
   return false;
-}
-
-bool isTimeToCheckSchedule () {
-  bool isTime = _irrLastScheduleCheck + TIMER_CHECK_THRESHOLD_SECONDS * 1000 < millis();
-  _irrLastScheduleCheck = isTime ? millis() : _irrLastScheduleCheck;
-  return isTime;
-}
-
-bool isTimeToIrrigate () {
-  debug(F("Checking if it is time to start irrigation"));
-  time_t now = time(nullptr);
-  Serial.printf("Current time: %s", ctime(&now));
-  struct tm * ptm = localtime(&now);
-  const char* mon = ptm->tm_mon < 12 ? MONTHS_OF_YEAR[ptm->tm_mon] : "";
-  const char* dow = ptm->tm_wday < 7 ? DAYS_OF_WEEK[ptm->tm_wday] : "";
-  // Evaluates cron at minute level. Seconds granularity is not needed for irrigarion scheduling.
-  boolean tti;
-  uint8_t cronNo = 0;
-  do {
-    tti = true;
-    tti &= _irrCronExpressions[cronNo][1][0] == '*' 
-                      || atoi(_irrCronExpressions[cronNo][1]) == ptm->tm_min 
-                      || (  
-                          ptm->tm_min > atoi(_irrCronExpressions[cronNo][1]) 
-                          && 
-                          ptm->tm_min - (TIMER_CHECK_THRESHOLD_SECONDS / 60) <= atoi(_irrCronExpressions[cronNo][1])
-                        ); // Minute
-    tti &= _irrCronExpressions[cronNo][2][0] == '*' 
-                      || atoi(_irrCronExpressions[cronNo][2]) == ptm->tm_hour; // Hour
-    tti &= _irrCronExpressions[cronNo][3][0] == '*' 
-                      || atoi(_irrCronExpressions[cronNo][3]) == ptm->tm_mday; // Day of month
-    tti &= _irrCronExpressions[cronNo][4][0] == '*' 
-                      || strncasecmp(mon, _irrCronExpressions[cronNo][4], CRON_FIELD_SIZE) == 0 
-                      || atoi(_irrCronExpressions[cronNo][4]) == ptm->tm_mon + 1; // Month
-    tti &= _irrCronExpressions[cronNo][5][0] == '?'
-                      || strncasecmp(dow, _irrCronExpressions[cronNo][5], CRON_FIELD_SIZE) == 0
-                      || atoi(_irrCronExpressions[cronNo][5]) == ptm->tm_wday + 1; // Day of week
-    debug(F("Checking cron"), cronNo);
-    ++cronNo;
-  } while (!tti && cronNo < MAX_CRONS);
-  debug(F("IS TTI?"), tti ? "YES" : "NO");
-  return tti;
 }

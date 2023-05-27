@@ -1,11 +1,5 @@
-.pioenvs
 .pio
-.piolibdeps
 .vscode
-.vscode/c_cpp_properties.json
-.vscode/launch.json
-.vscode/*.db
-.vscode/.browse.c_cpp.db*
 pcb/History
 pcb/__Previews
 *.log
